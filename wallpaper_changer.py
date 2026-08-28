@@ -10,7 +10,12 @@ import threading
 import time
 import atexit
 
-# 配置文件与壁纸缓存路径
+# 导入托盘和图像库
+import pystray
+from pystray import MenuItem as item
+from PIL import Image, ImageDraw
+
+# 路径配置
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "TouhouWallpaper")
 os.makedirs(APP_DIR, exist_ok=True)
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
@@ -26,18 +31,16 @@ DEFAULT_CONFIG = {
 }
 
 def get_current_windows_wallpaper():
-    """读取 Windows 当前正在使用的壁纸文件路径"""
+    """读取当前系统原壁纸路径"""
     buffer = ctypes.create_unicode_buffer(512)
-    # 0x0073 即 SPI_GETDESKWALLPAPER
     ctypes.windll.user32.SystemParametersInfoW(0x0073, len(buffer), buffer, 0)
     return buffer.value
 
 def set_wallpaper_windows(img_path):
-    """调用 Windows API 设置桌面壁纸"""
+    """调用 Windows API 更换壁纸"""
     if not img_path or not os.path.exists(img_path):
         return
     abs_path = os.path.abspath(img_path)
-    # 20 = SPI_SETDESKWALLPAPER, 3 = SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
     ctypes.windll.user32.SystemParametersInfoW(20, 0, abs_path, 3)
 
 def load_config():
@@ -55,7 +58,7 @@ def save_config(cfg):
         json.dump(cfg, f, indent=4, ensure_ascii=False)
 
 def set_auto_start_registry(enable=True):
-    """写入/删除注册表实现开机自启"""
+    """注册表开机自启"""
     key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
     app_name = "TouhouWallpaperAutoChanger"
     try:
@@ -82,6 +85,17 @@ def set_auto_start_registry(enable=True):
     except Exception as e:
         print(f"自启注册表修改失败: {e}")
 
+def create_tray_icon_image():
+    """动态绘制一个 64x64 的系统托盘图标（无需额外文件）"""
+    image = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+    dc = ImageDraw.Draw(image)
+    # 画一个蓝色背景圆
+    dc.ellipse([4, 4, 60, 60], fill="#3498db", outline="#2980b9", width=2)
+    # 画小山峰图案
+    dc.polygon([(16, 44), (28, 22), (40, 44)], fill="#ffffff")
+    dc.polygon([(34, 44), (44, 30), (52, 44)], fill="#ffffff")
+    return image
+
 
 class WallpaperApp:
     def __init__(self, root, silent=False):
@@ -93,26 +107,24 @@ class WallpaperApp:
         self.cfg = load_config()
         self.is_downloading = False
         
-        # 1. 备份原壁纸：
+        # 记录原始壁纸（防重复记录自身下载的壁纸）
         cur_wp = get_current_windows_wallpaper()
         if cur_wp and not cur_wp.lower().endswith("wallpaper.jpg"):
             self.cfg["original_wallpaper"] = cur_wp
             save_config(self.cfg)
         
-        # 注册程序退出钩子（双重保障）
-        atexit.register(self.restore_original_wallpaper)
-        
-        # 拦截右上角 [X] 关闭按钮
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close_window)
+        # 点击右上角 [X] 直接最小化到托盘
+        self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
         
         self.init_ui()
+        self.init_tray_icon()
         
-        # 启动时根据配置刷新
         if self.cfg.get("refresh_on_startup", True):
             self.fetch_and_set_wallpaper()
             
         self.timer_loop()
         
+        # 开机静默启动时直接隐藏
         if silent:
             self.root.withdraw()
 
@@ -177,11 +189,36 @@ class WallpaperApp:
         btn_frame.pack(fill=tk.X, pady=12)
 
         ttk.Button(btn_frame, text="立即换一张", command=self.fetch_and_set_wallpaper).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        ttk.Button(btn_frame, text="隐藏到后台", command=self.hide_to_background).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(btn_frame, text="保存设置", command=self.apply_settings).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(btn_frame, text="最小化到托盘", command=self.hide_to_tray).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
         ttk.Button(btn_frame, text="退出并还原壁纸", command=self.quit_and_restore).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
-    def apply_settings(self):
-        """保存配置"""
+    def init_tray_icon(self):
+        """创建 Windows 系统托盘图标与菜单"""
+        menu = (
+            item('打开设置界面', self.show_window_from_tray, default=True), # default=True 表示支持双击托盘打开
+            item('立即换一张壁纸', lambda: self.fetch_and_set_wallpaper()),
+            item('退出并还原壁纸', lambda: self.root.after(0, self.quit_and_restore))
+        )
+        self.tray_icon = pystray.Icon("TouhouWallpaper", create_tray_icon_image(), "TH wallpaper", menu)
+        # 独立线程运行托盘图标，避免阻塞 Tkinter
+        self.tray_icon.run_detached()
+
+    def show_window_from_tray(self):
+        """从托盘恢复显示窗口"""
+        self.root.after(0, self._restore_ui)
+
+    def _restore_ui(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def hide_to_tray(self):
+        """隐藏窗口到托盘"""
+        self.apply_settings(show_msg=False)
+        self.root.withdraw()
+
+    def apply_settings(self, show_msg=True):
         self.cfg["refresh_on_startup"] = self.var_startup.get()
         self.cfg["auto_start"] = self.var_autostart.get()
         self.cfg["interval_minutes"] = self.interval_map[self.interval_var.get()]
@@ -189,35 +226,25 @@ class WallpaperApp:
         self.cfg["size"] = self.size_var.get()
         save_config(self.cfg)
         set_auto_start_registry(self.cfg["auto_start"])
-
-    def hide_to_background(self):
-        """隐藏窗口（保持轮播）"""
-        self.apply_settings()
-        self.root.withdraw()
+        if show_msg:
+            messagebox.showinfo("成功", "设置已保存并生效！")
 
     def restore_original_wallpaper(self):
-        """还原为原壁纸"""
         orig_wp = self.cfg.get("original_wallpaper", "")
         if orig_wp and os.path.exists(orig_wp):
             set_wallpaper_windows(orig_wp)
 
     def quit_and_restore(self):
-        """彻底退出程序并恢复原壁纸"""
+        """停止托盘，还原壁纸，彻底退出"""
+        try:
+            self.tray_icon.stop()
+        except Exception:
+            pass
         self.restore_original_wallpaper()
         self.root.destroy()
         sys.exit(0)
 
-    def on_close_window(self):
-        """点击右上角 X 时的行为选择"""
-        # 弹窗询问是退出还是最小化后台
-        ans = messagebox.askyesnocancel("关闭确认", "是否完全退出软件并恢复原来的壁纸？\n\n【是】：彻底退出并还原原壁纸\n【否】：仅隐藏到后台继续轮播壁纸\n【取消】：不进行任何操作")
-        if ans is True:
-            self.quit_and_restore()
-        elif ans is False:
-            self.hide_to_background()
-
     def fetch_and_set_wallpaper(self):
-        """异步拉取图片并设为壁纸"""
         if self.is_downloading:
             return
         
@@ -227,7 +254,6 @@ class WallpaperApp:
             try:
                 api_url = f"https://img.paulzzh.com/touhou/random?size={self.cfg['size']}&site={self.cfg['site']}"
                 req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
-                
                 with urllib.request.urlopen(req, timeout=15) as response:
                     img_data = response.read()
                 
