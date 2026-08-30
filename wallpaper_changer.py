@@ -1,19 +1,21 @@
 import os
 import sys
 import json
+import re
 import urllib.request
+import urllib.error
 import shutil
 import ctypes
 import winreg
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 import threading
 import time
 import atexit
 
 import pystray
 from pystray import MenuItem as item
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 
 # 基础目录与路径
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "TouhouWallpaper")
@@ -45,6 +47,20 @@ def set_wallpaper_windows(img_path):
     abs_path = os.path.abspath(img_path)
     ctypes.windll.user32.SystemParametersInfoW(20, 0, abs_path, 3)
     return True
+
+def fetch_with_retry(url, timeout=15, retries=3, backoff_base=2):
+    """带重试机制的 urlopen 封装：最多尝试 retries 次，失败后按指数退避等待"""
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return response.read()
+        except Exception as e:
+            last_exc = e
+            if attempt < retries - 1:
+                time.sleep(backoff_base ** attempt)
+    raise last_exc
 
 def load_config():
     cfg = DEFAULT_CONFIG.copy()
@@ -97,7 +113,7 @@ class WallpaperApp:
     def __init__(self, root, silent=False):
         self.root = root
         self.root.title("TH wallpaper")
-        self.root.geometry("480x520")
+        self.root.geometry("480x700")
         self.root.resizable(False, False)
         
         self.cfg = load_config()
@@ -194,11 +210,19 @@ class WallpaperApp:
         self.fav_combo_var = tk.StringVar()
         self.fav_combo = ttk.Combobox(fav_sel_box, textvariable=self.fav_combo_var, state="readonly", width=22)
         self.fav_combo.pack(side=tk.LEFT, padx=5)
+        self.fav_combo.bind("<<ComboboxSelected>>", lambda e: self.update_favorite_preview())
 
         fav_action_box = ttk.Frame(fav_frame)
         fav_action_box.pack(fill=tk.X, pady=2)
         ttk.Button(fav_action_box, text="应用选中的星标壁纸", command=self.apply_selected_favorite).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
         ttk.Button(fav_action_box, text="🗑️ 取消星标 (本地删除)", command=self.delete_selected_favorite).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+
+        # 星标壁纸预览图
+        self.preview_canvas = tk.Canvas(fav_frame, width=400, height=180, bg="#f0f0f0",
+                                        highlightthickness=1, highlightbackground="#c0c0c0")
+        self.preview_canvas.pack(fill=tk.X, pady=4)
+        self._preview_img = None
+        self.update_favorite_preview()
 
         # 5. 底部主控制按钮
         btn_frame = ttk.Frame(frame)
@@ -219,9 +243,34 @@ class WallpaperApp:
                 self.fav_combo.current(0)
         else:
             self.fav_combo_var.set("暂无收藏壁纸")
+        self.update_favorite_preview()
+
+    def update_favorite_preview(self):
+        """刷新星标壁纸预览图"""
+        self.preview_canvas.delete("all")
+        self._preview_img = None
+
+        filename = self.fav_combo_var.get()
+        if not filename or filename == "暂无收藏壁纸":
+            self.preview_canvas.create_text(200, 90, text="暂无预览", fill="#888888")
+            return
+
+        fav_path = os.path.join(FAVORITES_DIR, filename)
+        if not os.path.exists(fav_path):
+            self.preview_canvas.create_text(200, 90, text="文件不存在", fill="#888888")
+            return
+
+        try:
+            img = Image.open(fav_path)
+            img.thumbnail((398, 178))
+            self._preview_img = ImageTk.PhotoImage(img)
+            self.preview_canvas.create_image((400 - img.width) // 2, (180 - img.height) // 2,
+                                             anchor=tk.NW, image=self._preview_img)
+        except Exception:
+            self.preview_canvas.create_text(200, 90, text="无法预览", fill="#888888")
 
     def favorite_current_wallpaper(self):
-        """星标收藏当前壁纸"""
+        """星标收藏当前壁纸（收藏时可为壁纸重命名）"""
         if not self.current_applied_wallpaper or not os.path.exists(self.current_applied_wallpaper):
             messagebox.showwarning("提示", "当前没有正在显示的有效壁纸！")
             return
@@ -231,9 +280,28 @@ class WallpaperApp:
             messagebox.showinfo("提示", "这张壁纸已经在你的星标收藏夹中了！")
             return
 
-        # 拷贝到收藏夹，以时间戳命名
-        fav_filename = f"fav_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+        # 收藏时弹出命名对话框，为壁纸重命名
+        default_name = f"fav_{time.strftime('%Y%m%d_%H%M%S')}"
+        new_name = simpledialog.askstring(
+            "星标命名",
+            "为这张星标壁纸命名（将作为收藏夹中的文件名）:",
+            initialvalue=default_name,
+            parent=self.root
+        )
+        if new_name is None:  # 用户取消收藏
+            return
+        new_name = new_name.strip() or default_name
+        # 清洗非法文件名字符
+        new_name = re.sub(r'[\\/:*?"<>|]', "_", new_name)
+
+        # 拷贝到收藏夹，以用户命名保存
+        fav_filename = f"{new_name}.jpg"
         fav_path = os.path.join(FAVORITES_DIR, fav_filename)
+        # 若同名已存在则追加时间戳避免覆盖
+        if os.path.exists(fav_path):
+            base, ext = os.path.splitext(fav_filename)
+            fav_filename = f"{base}_{time.strftime('%Y%m%d_%H%M%S')}{ext}"
+            fav_path = os.path.join(FAVORITES_DIR, fav_filename)
         shutil.copy2(self.current_applied_wallpaper, fav_path)
         
         # 切换当前壁纸引用为收藏目录下的文件，并转为星标锁定模式
@@ -243,7 +311,8 @@ class WallpaperApp:
         
         self.refresh_favorites_list()
         self.fav_combo_var.set(fav_filename)
-        self.status_var.set(f"状态: ⭐ 已收藏并锁定壁纸（定时轮播已暂停）")
+        self.update_favorite_preview()
+        self.status_var.set(f"状态: ⭐ 已收藏并锁定壁纸 [{fav_filename}]（定时轮播已暂停）")
         messagebox.showinfo("收藏成功", f"壁纸已加入星标收藏！\n定时轮播已暂停，将持续锁定本壁纸。")
 
     def apply_selected_favorite(self):
@@ -259,6 +328,7 @@ class WallpaperApp:
             self.current_applied_wallpaper = fav_path
             self.mode = "favorite"  # 切换到星标模式：定时器将不再自动切图
             self.status_var.set(f"状态: ⭐ 使用星标壁纸 [{filename}]（定时轮播已暂停）")
+            self.update_favorite_preview()
 
     def delete_selected_favorite(self):
         """取消星标并从本地物理删除文件"""
@@ -277,6 +347,7 @@ class WallpaperApp:
                 os.remove(fav_path)
             
             self.refresh_favorites_list()
+            self.update_favorite_preview()
             messagebox.showinfo("提示", "已取消星标并删除本地文件！")
             
             if is_current:
@@ -295,9 +366,7 @@ class WallpaperApp:
             self.status_var.set("状态: 正在下载新壁纸...")
             try:
                 api_url = f"https://img.paulzzh.com/touhou/random?size={self.cfg['size']}&site={self.cfg['site']}"
-                req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=15) as response:
-                    img_data = response.read()
+                img_data = fetch_with_retry(api_url, timeout=15, retries=3)
                 
                 with open(TEMP_WALLPAPER_PATH, "wb") as f:
                     f.write(img_data)
