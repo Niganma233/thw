@@ -17,6 +17,11 @@ import pystray
 from pystray import MenuItem as item
 from PIL import Image, ImageDraw, ImageTk
 
+try:
+    import keyboard
+except ImportError:
+    keyboard = None
+
 # 基础目录与路径
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "TouhouWallpaper")
 FAVORITES_DIR = os.path.join(APP_DIR, "Favorites")
@@ -31,7 +36,10 @@ DEFAULT_CONFIG = {
     "interval_minutes": 30,
     "site": "all",
     "size": "pc",
-    "original_wallpaper": ""
+    "original_wallpaper": "",
+    "favorite_carousel": False,
+    "hotkey_favorite": "",
+    "hotkey_switch": ""
 }
 
 def get_current_windows_wallpaper():
@@ -113,7 +121,7 @@ class WallpaperApp:
     def __init__(self, root, silent=False):
         self.root = root
         self.root.title("TH wallpaper")
-        self.root.geometry("480x700")
+        self.root.geometry("480x800")
         self.root.resizable(False, False)
         
         self.cfg = load_config()
@@ -122,6 +130,10 @@ class WallpaperApp:
         # 运行模式: "online" (在线轮播中) 或 "favorite" (锁定星标壁纸，停止定时刷新)
         self.mode = "online"
         self.current_applied_wallpaper = ""
+        # 连续下载失败次数（用于失败后的指数退避重试）
+        self._consecutive_failures = 0
+        # 下次自动轮播的绝对时间戳（成功下载/点击换一张后重新计时）
+        self._next_refresh_time = time.time() + self.cfg.get("interval_minutes", 30) * 60
 
         # 备份系统最初的原壁纸
         cur_wp = get_current_windows_wallpaper()
@@ -134,6 +146,7 @@ class WallpaperApp:
         self.init_ui()
         self.refresh_favorites_list()
         self.init_tray_icon()
+        self.register_hotkeys()
         
         if self.cfg.get("refresh_on_startup", True):
             self.fetch_and_set_wallpaper()
@@ -194,7 +207,7 @@ class WallpaperApp:
         ttk.Combobox(row_box, textvariable=self.size_var, values=["pc", "mobile"], state="readonly", width=8).pack(side=tk.LEFT, padx=5)
 
         # 4. ★ 星标/收藏管理面板 ★
-        fav_frame = ttk.LabelFrame(frame, text="⭐ 星标收藏夹管理 (使用星标壁纸时定时刷新自动暂停)", padding=8)
+        fav_frame = ttk.LabelFrame(frame, text="⭐ 星标收藏夹管理", padding=8)
         fav_frame.pack(fill=tk.X, pady=6)
 
         # 收藏操作行
@@ -202,6 +215,10 @@ class WallpaperApp:
         fav_op_box.pack(fill=tk.X, pady=2)
         ttk.Button(fav_op_box, text="⭐ 收藏当前壁纸", command=self.favorite_current_wallpaper).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
         ttk.Button(fav_op_box, text="📂 打开收藏文件夹", command=lambda: os.startfile(FAVORITES_DIR)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+
+        self.var_fav_carousel = tk.BooleanVar(value=self.cfg.get("favorite_carousel", False))
+        ttk.Checkbutton(fav_frame, text="定时轮播星标壁纸（开启后收藏夹内壁纸按设置间隔自动切换）",
+                        variable=self.var_fav_carousel).pack(anchor=tk.W, pady=(2, 0))
 
         # 收藏列表选择行
         fav_sel_box = ttk.Frame(fav_frame)
@@ -224,7 +241,26 @@ class WallpaperApp:
         self._preview_img = None
         self.update_favorite_preview()
 
-        # 5. 底部主控制按钮
+        # 5. 全局快捷键设置（默认不设置，需用户自行填写）
+        hk_frame = ttk.LabelFrame(frame, text="⌨ 全局快捷键（默认不设置，需自行填写）", padding=8)
+        hk_frame.pack(fill=tk.X, pady=4)
+
+        hk_row1 = ttk.Frame(hk_frame)
+        hk_row1.pack(fill=tk.X, pady=2)
+        ttk.Label(hk_row1, text="收藏当前壁纸:").pack(side=tk.LEFT)
+        self.hk_fav_var = tk.StringVar(value=self.cfg.get("hotkey_favorite", ""))
+        ttk.Entry(hk_row1, textvariable=self.hk_fav_var, width=24).pack(side=tk.LEFT, padx=5)
+
+        hk_row2 = ttk.Frame(hk_frame)
+        hk_row2.pack(fill=tk.X, pady=2)
+        ttk.Label(hk_row2, text="切换在线壁纸:").pack(side=tk.LEFT)
+        self.hk_switch_var = tk.StringVar(value=self.cfg.get("hotkey_switch", ""))
+        ttk.Entry(hk_row2, textvariable=self.hk_switch_var, width=24).pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(hk_frame, text="提示：例如 ctrl+shift+s / ctrl+shift+f，点击保存设置后生效。",
+                  foreground="#888888").pack(anchor=tk.W)
+
+        # 6. 底部主控制按钮
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill=tk.X, pady=10)
 
@@ -312,11 +348,12 @@ class WallpaperApp:
         self.refresh_favorites_list()
         self.fav_combo_var.set(fav_filename)
         self.update_favorite_preview()
+        self.reset_refresh_timer()
         self.status_var.set(f"状态: ⭐ 已收藏并锁定壁纸 [{fav_filename}]（定时轮播已暂停）")
         messagebox.showinfo("收藏成功", f"壁纸已加入星标收藏！\n定时轮播已暂停，将持续锁定本壁纸。")
 
     def apply_selected_favorite(self):
-        """使用选中的星标壁纸（锁定并不被定时更换）"""
+        """使用选中的星标壁纸（进入星标模式）"""
         filename = self.fav_combo_var.get()
         if not filename or filename == "暂无收藏壁纸":
             messagebox.showwarning("提示", "请先选择一张有效的星标壁纸！")
@@ -326,9 +363,27 @@ class WallpaperApp:
         if os.path.exists(fav_path):
             set_wallpaper_windows(fav_path)
             self.current_applied_wallpaper = fav_path
-            self.mode = "favorite"  # 切换到星标模式：定时器将不再自动切图
-            self.status_var.set(f"状态: ⭐ 使用星标壁纸 [{filename}]（定时轮播已暂停）")
+            self.mode = "favorite"  # 切换到星标模式：定时器不再拉取在线壁纸
+            self.reset_refresh_timer()
+            if self.cfg.get("favorite_carousel", False):
+                self.status_var.set(f"状态: ⭐ 使用星标壁纸 [{filename}]（开启星标轮播）")
+            else:
+                self.status_var.set(f"状态: ⭐ 使用星标壁纸 [{filename}]（定时轮播已暂停）")
             self.update_favorite_preview()
+
+    def cycle_favorite(self):
+        """星标轮播：切换到收藏夹中的下一张壁纸"""
+        files = [f for f in os.listdir(FAVORITES_DIR) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+        if not files:
+            return
+        cur = self.fav_combo_var.get()
+        try:
+            idx = files.index(cur)
+            nxt = files[(idx + 1) % len(files)]
+        except ValueError:
+            nxt = files[0]
+        self.fav_combo_var.set(nxt)
+        self.apply_selected_favorite()
 
     def delete_selected_favorite(self):
         """取消星标并从本地物理删除文件"""
@@ -356,8 +411,21 @@ class WallpaperApp:
             messagebox.showerror("错误", f"删除失败: {e}")
 
     # ---------------- 在线拉取与壁纸设置 ----------------
+    def reset_refresh_timer(self):
+        """重置轮播计时器（以当前时间为基准重新计时）"""
+        self._consecutive_failures = 0
+        interval = self.cfg.get("interval_minutes", 30)
+        self._next_refresh_time = time.time() + interval * 60
+
+    def _schedule_failure_backoff(self):
+        """下载失败后按指数退避安排下次自动重试，避免频繁请求服务器"""
+        self._consecutive_failures += 1
+        cap = max(self.cfg.get("interval_minutes", 30) * 60, 60)
+        wait = min(30 * (2 ** (self._consecutive_failures - 1)), cap)
+        self._next_refresh_time = time.time() + wait
+
     def fetch_and_set_wallpaper(self):
-        """拉取在线壁纸（会自动重置为 online 模式并激活轮播）"""
+        """拉取在线壁纸（成功后会重置轮播计时，失败则退避重试）"""
         if self.is_downloading:
             return
         
@@ -375,28 +443,59 @@ class WallpaperApp:
                 self.current_applied_wallpaper = TEMP_WALLPAPER_PATH
                 self.mode = "online" # 恢复在线轮播状态
                 self.status_var.set(f"状态: 在线壁纸更换成功 ({time.strftime('%H:%M:%S')})")
+                # 仅下载成功才重新计时（含手动点击"换一张"触发的情况）
+                self.reset_refresh_timer()
             except Exception as e:
                 self.status_var.set(f"状态: 更换失败 ({str(e)})")
+                # 下载失败：不重置为完整间隔，改为指数退避等待，降低服务器压力
+                self._schedule_failure_backoff()
             finally:
                 self.is_downloading = False
 
         threading.Thread(target=_task, daemon=True).start()
 
     def timer_loop(self):
-        """定时器循环检测"""
+        """定时器循环检测（基于绝对时间戳判断）"""
         interval = self.cfg.get("interval_minutes", 30)
-        # 关键点：只有在 online 模式下才执行定时切换；favorite 模式下时间对其无效！
-        if self.mode == "online" and interval > 0:
-            now = time.time()
-            if not hasattr(self, "_last_refresh_time"):
-                self._last_refresh_time = now
-            elif now - self._last_refresh_time >= interval * 60:
+        # 关键点：online 模式按绝对时间戳触发在线下载；favorite 模式仅在开启星标轮播时
+        # 自动切换收藏夹壁纸。判断依据均为 _next_refresh_time。
+        if interval > 0 and time.time() >= self._next_refresh_time:
+            if self.mode == "online":
                 self.fetch_and_set_wallpaper()
-                self._last_refresh_time = now
+            elif self.mode == "favorite" and self.cfg.get("favorite_carousel", False):
+                self.cycle_favorite()
 
         self.root.after(30 * 1000, self.timer_loop)
 
     # ---------------- 托盘与退出 ----------------
+    def register_hotkeys(self):
+        """注册全局快捷键（默认不设置，为空则跳过；回调切换到主线程执行）"""
+        try:
+            if keyboard is not None:
+                keyboard.unhook_all_hotkeys()
+        except Exception:
+            pass
+
+        if keyboard is None:
+            return
+
+        hotkey_fav = self.cfg.get("hotkey_favorite", "").strip()
+        hotkey_switch = self.cfg.get("hotkey_switch", "").strip()
+
+        if hotkey_fav:
+            try:
+                keyboard.add_hotkey(hotkey_fav, lambda: self.root.after(0, self.favorite_current_wallpaper))
+            except Exception as e:
+                print(f"收藏快捷键注册失败 [{hotkey_fav}]: {e}")
+                self.status_var.set(f"状态: 收藏快捷键注册失败 [{hotkey_fav}]")
+
+        if hotkey_switch:
+            try:
+                keyboard.add_hotkey(hotkey_switch, lambda: self.root.after(0, self.fetch_and_set_wallpaper))
+            except Exception as e:
+                print(f"切换壁纸快捷键注册失败 [{hotkey_switch}]: {e}")
+                self.status_var.set(f"状态: 切换快捷键注册失败 [{hotkey_switch}]")
+
     def init_tray_icon(self):
         menu = (
             item('打开设置界面', lambda: self.root.after(0, self._restore_ui), default=True),
@@ -423,8 +522,12 @@ class WallpaperApp:
         self.cfg["interval_minutes"] = self.interval_map[self.interval_var.get()]
         self.cfg["site"] = self.site_var.get()
         self.cfg["size"] = self.size_var.get()
+        self.cfg["favorite_carousel"] = self.var_fav_carousel.get()
+        self.cfg["hotkey_favorite"] = self.hk_fav_var.get().strip()
+        self.cfg["hotkey_switch"] = self.hk_switch_var.get().strip()
         save_config(self.cfg)
         set_auto_start_registry(self.cfg["auto_start"])
+        self.register_hotkeys()
         if show_msg:
             messagebox.showinfo("成功", "设置已保存并生效！")
 
@@ -436,6 +539,11 @@ class WallpaperApp:
     def quit_and_restore(self):
         try:
             self.tray_icon.stop()
+        except Exception:
+            pass
+        try:
+            if keyboard is not None:
+                keyboard.unhook_all_hotkeys()
         except Exception:
             pass
         self.restore_original_wallpaper()
