@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import urllib.request
+import shutil
 import ctypes
 import winreg
 import tkinter as tk
@@ -10,38 +11,40 @@ import threading
 import time
 import atexit
 
-# 导入托盘和图像库
 import pystray
 from pystray import MenuItem as item
 from PIL import Image, ImageDraw
 
-# 路径配置
+# 基础目录与路径
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "TouhouWallpaper")
-os.makedirs(APP_DIR, exist_ok=True)
+FAVORITES_DIR = os.path.join(APP_DIR, "Favorites")
+os.makedirs(FAVORITES_DIR, exist_ok=True)
+
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
-WALLPAPER_PATH = os.path.join(APP_DIR, "wallpaper.jpg")
+TEMP_WALLPAPER_PATH = os.path.join(APP_DIR, "wallpaper_temp.jpg")
 
 DEFAULT_CONFIG = {
-    "auto_start": True,             # 开机自启
-    "refresh_on_startup": True,     # 启动时刷新一次
-    "interval_minutes": 30,         # 定时间隔（分钟，0为不自动定时刷新）
-    "site": "all",                  # konachan, yandere, all
-    "size": "pc",                   # pc (横屏), mobile (竖屏)
-    "original_wallpaper": ""        # 记录用户的原始壁纸路径
+    "auto_start": True,
+    "refresh_on_startup": True,
+    "interval_minutes": 30,
+    "site": "all",
+    "size": "pc",
+    "original_wallpaper": ""
 }
 
 def get_current_windows_wallpaper():
-    """读取当前系统原壁纸路径"""
+    """获取当前系统壁纸路径"""
     buffer = ctypes.create_unicode_buffer(512)
     ctypes.windll.user32.SystemParametersInfoW(0x0073, len(buffer), buffer, 0)
     return buffer.value
 
 def set_wallpaper_windows(img_path):
-    """调用 Windows API 更换壁纸"""
+    """设置 Windows 壁纸"""
     if not img_path or not os.path.exists(img_path):
-        return
+        return False
     abs_path = os.path.abspath(img_path)
     ctypes.windll.user32.SystemParametersInfoW(20, 0, abs_path, 3)
+    return True
 
 def load_config():
     cfg = DEFAULT_CONFIG.copy()
@@ -58,7 +61,6 @@ def save_config(cfg):
         json.dump(cfg, f, indent=4, ensure_ascii=False)
 
 def set_auto_start_registry(enable=True):
-    """注册表开机自启"""
     key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
     app_name = "TouhouWallpaperAutoChanger"
     try:
@@ -70,11 +72,7 @@ def set_auto_start_registry(enable=True):
                 pythonw = python_exe
             
             script_path = os.path.abspath(sys.argv[0])
-            if script_path.endswith(".exe"):
-                cmd = f'"{script_path}" --silent'
-            else:
-                cmd = f'"{pythonw}" "{script_path}" --silent'
-                
+            cmd = f'"{script_path}" --silent' if script_path.endswith(".exe") else f'"{pythonw}" "{script_path}" --silent'
             winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, cmd)
         else:
             try:
@@ -86,12 +84,10 @@ def set_auto_start_registry(enable=True):
         print(f"自启注册表修改失败: {e}")
 
 def create_tray_icon_image():
-    """动态绘制一个 64x64 的系统托盘图标（无需额外文件）"""
+    """绘制托盘小图标"""
     image = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
     dc = ImageDraw.Draw(image)
-    # 画一个蓝色背景圆
     dc.ellipse([4, 4, 60, 60], fill="#3498db", outline="#2980b9", width=2)
-    # 画小山峰图案
     dc.polygon([(16, 44), (28, 22), (40, 44)], fill="#ffffff")
     dc.polygon([(34, 44), (44, 30), (52, 44)], fill="#ffffff")
     return image
@@ -101,22 +97,26 @@ class WallpaperApp:
     def __init__(self, root, silent=False):
         self.root = root
         self.root.title("TH wallpaper")
-        self.root.geometry("450x390")
+        self.root.geometry("480x520")
         self.root.resizable(False, False)
         
         self.cfg = load_config()
         self.is_downloading = False
         
-        # 记录原始壁纸（防重复记录自身下载的壁纸）
+        # 运行模式: "online" (在线轮播中) 或 "favorite" (锁定星标壁纸，停止定时刷新)
+        self.mode = "online"
+        self.current_applied_wallpaper = ""
+
+        # 备份系统最初的原壁纸
         cur_wp = get_current_windows_wallpaper()
-        if cur_wp and not cur_wp.lower().endswith("wallpaper.jpg"):
+        if cur_wp and not cur_wp.lower().startswith(APP_DIR.lower()):
             self.cfg["original_wallpaper"] = cur_wp
             save_config(self.cfg)
         
-        # 点击右上角 [X] 直接最小化到托盘
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
         
         self.init_ui()
+        self.refresh_favorites_list()
         self.init_tray_icon()
         
         if self.cfg.get("refresh_on_startup", True):
@@ -124,40 +124,34 @@ class WallpaperApp:
             
         self.timer_loop()
         
-        # 开机静默启动时直接隐藏
         if silent:
             self.root.withdraw()
 
     def init_ui(self):
-        frame = ttk.Frame(self.root, padding=20)
+        frame = ttk.Frame(self.root, padding=15)
         frame.pack(fill=tk.BOTH, expand=True)
 
-        self.status_var = tk.StringVar(value="状态: 运行中")
-        ttk.Label(frame, textvariable=self.status_var, font=("Microsoft YaHei", 10, "bold")).pack(anchor=tk.W, pady=5)
+        # 1. 顶部状态
+        self.status_var = tk.StringVar(value="状态: 在线轮播就绪")
+        ttk.Label(frame, textvariable=self.status_var, font=("Microsoft YaHei", 9, "bold")).pack(anchor=tk.W, pady=(0, 5))
 
-        # 刷新条件设置
-        cond_frame = ttk.LabelFrame(frame, text="刷新条件设置", padding=10)
-        cond_frame.pack(fill=tk.X, pady=8)
+        # 2. 刷新条件设置
+        cond_frame = ttk.LabelFrame(frame, text="自动轮播设置", padding=8)
+        cond_frame.pack(fill=tk.X, pady=4)
 
         self.var_startup = tk.BooleanVar(value=self.cfg["refresh_on_startup"])
-        ttk.Checkbutton(cond_frame, text="开机 / 启动时立即刷新一次", variable=self.var_startup).pack(anchor=tk.W, pady=2)
+        ttk.Checkbutton(cond_frame, text="开机 / 启动时立即刷新一次", variable=self.var_startup).pack(anchor=tk.W)
 
         self.var_autostart = tk.BooleanVar(value=self.cfg["auto_start"])
-        ttk.Checkbutton(cond_frame, text="开机时自动启动本程序", variable=self.var_autostart).pack(anchor=tk.W, pady=2)
+        ttk.Checkbutton(cond_frame, text="开机时自动启动本程序", variable=self.var_autostart).pack(anchor=tk.W)
 
         interval_box = ttk.Frame(cond_frame)
-        interval_box.pack(fill=tk.X, pady=4)
+        interval_box.pack(fill=tk.X, pady=2)
         ttk.Label(interval_box, text="定时刷新间隔:").pack(side=tk.LEFT)
         
-        self.interval_var = tk.StringVar()
         intervals = {
-            "不自动定时": 0,
-            "每 5 分钟": 5,
-            "每 15 分钟": 15,
-            "每 30 分钟": 30,
-            "每 1 小时": 60,
-            "每 2 小时": 120,
-            "每 4 小时": 240
+            "不自动定时": 0, "每 5 分钟": 5, "每 15 分钟": 15,
+            "每 30 分钟": 30, "每 1 小时": 60, "每 2 小时": 120, "每 4 小时": 240
         }
         self.interval_map = intervals
         cur_text = "每 30 分钟"
@@ -165,56 +159,192 @@ class WallpaperApp:
             if v == self.cfg["interval_minutes"]:
                 cur_text = k
                 break
-        self.interval_var.set(cur_text)
-        
+        self.interval_var = tk.StringVar(value=cur_text)
         self.combo_interval = ttk.Combobox(interval_box, textvariable=self.interval_var, values=list(intervals.keys()), state="readonly", width=12)
-        self.combo_interval.pack(side=tk.LEFT, padx=10)
+        self.combo_interval.pack(side=tk.LEFT, padx=8)
 
-        # 图片偏好
-        api_frame = ttk.LabelFrame(frame, text="图片偏好设置", padding=10)
-        api_frame.pack(fill=tk.X, pady=5)
+        # 3. 在线偏好设置
+        api_frame = ttk.LabelFrame(frame, text="在线图片偏好", padding=8)
+        api_frame.pack(fill=tk.X, pady=4)
 
-        ttk.Label(api_frame, text="图源选择:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        row_box = ttk.Frame(api_frame)
+        row_box.pack(fill=tk.X)
+        ttk.Label(row_box, text="图源:").pack(side=tk.LEFT)
         self.site_var = tk.StringVar(value=self.cfg["site"])
-        site_combo = ttk.Combobox(api_frame, textvariable=self.site_var, values=["all", "konachan", "yandere"], state="readonly", width=12)
-        site_combo.grid(row=0, column=1, padx=10, sticky=tk.W)
+        ttk.Combobox(row_box, textvariable=self.site_var, values=["all", "konachan", "yandere"], state="readonly", width=10).pack(side=tk.LEFT, padx=(5, 15))
 
-        ttk.Label(api_frame, text="尺寸类型:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Label(row_box, text="尺寸:").pack(side=tk.LEFT)
         self.size_var = tk.StringVar(value=self.cfg["size"])
-        size_combo = ttk.Combobox(api_frame, textvariable=self.size_var, values=["pc", "mobile"], state="readonly", width=12)
-        size_combo.grid(row=1, column=1, padx=10, sticky=tk.W)
+        ttk.Combobox(row_box, textvariable=self.size_var, values=["pc", "mobile"], state="readonly", width=8).pack(side=tk.LEFT, padx=5)
 
-        # 底部控制按钮
+        # 4. ★ 星标/收藏管理面板 ★
+        fav_frame = ttk.LabelFrame(frame, text="⭐ 星标收藏夹管理 (使用星标壁纸时定时刷新自动暂停)", padding=8)
+        fav_frame.pack(fill=tk.X, pady=6)
+
+        # 收藏操作行
+        fav_op_box = ttk.Frame(fav_frame)
+        fav_op_box.pack(fill=tk.X, pady=2)
+        ttk.Button(fav_op_box, text="⭐ 收藏当前壁纸", command=self.favorite_current_wallpaper).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(fav_op_box, text="📂 打开收藏文件夹", command=lambda: os.startfile(FAVORITES_DIR)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+
+        # 收藏列表选择行
+        fav_sel_box = ttk.Frame(fav_frame)
+        fav_sel_box.pack(fill=tk.X, pady=4)
+        ttk.Label(fav_sel_box, text="已收藏壁纸:").pack(side=tk.LEFT)
+        self.fav_combo_var = tk.StringVar()
+        self.fav_combo = ttk.Combobox(fav_sel_box, textvariable=self.fav_combo_var, state="readonly", width=22)
+        self.fav_combo.pack(side=tk.LEFT, padx=5)
+
+        fav_action_box = ttk.Frame(fav_frame)
+        fav_action_box.pack(fill=tk.X, pady=2)
+        ttk.Button(fav_action_box, text="应用选中的星标壁纸", command=self.apply_selected_favorite).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(fav_action_box, text="🗑️ 取消星标 (本地删除)", command=self.delete_selected_favorite).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+
+        # 5. 底部主控制按钮
         btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, pady=12)
+        btn_frame.pack(fill=tk.X, pady=10)
 
-        ttk.Button(btn_frame, text="立即换一张", command=self.fetch_and_set_wallpaper).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        ttk.Button(btn_frame, text="保存设置", command=self.apply_settings).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        ttk.Button(btn_frame, text="最小化到托盘", command=self.hide_to_tray).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        ttk.Button(btn_frame, text="退出并还原壁纸", command=self.quit_and_restore).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(btn_frame, text="🎲 换一张在线壁纸", command=self.fetch_and_set_wallpaper).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(btn_frame, text="💾 保存设置", command=self.apply_settings).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(btn_frame, text="🗕 最小化到托盘", command=self.hide_to_tray).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(btn_frame, text="❌ 退出并还原", command=self.quit_and_restore).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
+    # ---------------- 收藏 / 星标逻辑 ----------------
+    def refresh_favorites_list(self):
+        """刷新收藏下拉框"""
+        files = [f for f in os.listdir(FAVORITES_DIR) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+        self.fav_combo['values'] = files
+        if files:
+            if not self.fav_combo_var.get() or self.fav_combo_var.get() not in files:
+                self.fav_combo.current(0)
+        else:
+            self.fav_combo_var.set("暂无收藏壁纸")
+
+    def favorite_current_wallpaper(self):
+        """星标收藏当前壁纸"""
+        if not self.current_applied_wallpaper or not os.path.exists(self.current_applied_wallpaper):
+            messagebox.showwarning("提示", "当前没有正在显示的有效壁纸！")
+            return
+        
+        # 如果当前壁纸已经在收藏夹中
+        if os.path.dirname(os.path.abspath(self.current_applied_wallpaper)) == os.path.abspath(FAVORITES_DIR):
+            messagebox.showinfo("提示", "这张壁纸已经在你的星标收藏夹中了！")
+            return
+
+        # 拷贝到收藏夹，以时间戳命名
+        fav_filename = f"fav_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+        fav_path = os.path.join(FAVORITES_DIR, fav_filename)
+        shutil.copy2(self.current_applied_wallpaper, fav_path)
+        
+        # 切换当前壁纸引用为收藏目录下的文件，并转为星标锁定模式
+        self.current_applied_wallpaper = fav_path
+        set_wallpaper_windows(fav_path)
+        self.mode = "favorite"
+        
+        self.refresh_favorites_list()
+        self.fav_combo_var.set(fav_filename)
+        self.status_var.set(f"状态: ⭐ 已收藏并锁定壁纸（定时轮播已暂停）")
+        messagebox.showinfo("收藏成功", f"壁纸已加入星标收藏！\n定时轮播已暂停，将持续锁定本壁纸。")
+
+    def apply_selected_favorite(self):
+        """使用选中的星标壁纸（锁定并不被定时更换）"""
+        filename = self.fav_combo_var.get()
+        if not filename or filename == "暂无收藏壁纸":
+            messagebox.showwarning("提示", "请先选择一张有效的星标壁纸！")
+            return
+        
+        fav_path = os.path.join(FAVORITES_DIR, filename)
+        if os.path.exists(fav_path):
+            set_wallpaper_windows(fav_path)
+            self.current_applied_wallpaper = fav_path
+            self.mode = "favorite"  # 切换到星标模式：定时器将不再自动切图
+            self.status_var.set(f"状态: ⭐ 使用星标壁纸 [{filename}]（定时轮播已暂停）")
+
+    def delete_selected_favorite(self):
+        """取消星标并从本地物理删除文件"""
+        filename = self.fav_combo_var.get()
+        if not filename or filename == "暂无收藏壁纸":
+            return
+        
+        if not messagebox.askyesno("确认删除", f"确定要取消星标并从本地永久删除图片【{filename}】吗？"):
+            return
+        
+        fav_path = os.path.join(FAVORITES_DIR, filename)
+        try:
+            # 如果当前桌面正好是这张被删除的壁纸，自动切换回在线壁纸
+            is_current = (os.path.abspath(self.current_applied_wallpaper) == os.path.abspath(fav_path))
+            if os.path.exists(fav_path):
+                os.remove(fav_path)
+            
+            self.refresh_favorites_list()
+            messagebox.showinfo("提示", "已取消星标并删除本地文件！")
+            
+            if is_current:
+                self.fetch_and_set_wallpaper()
+        except Exception as e:
+            messagebox.showerror("错误", f"删除失败: {e}")
+
+    # ---------------- 在线拉取与壁纸设置 ----------------
+    def fetch_and_set_wallpaper(self):
+        """拉取在线壁纸（会自动重置为 online 模式并激活轮播）"""
+        if self.is_downloading:
+            return
+        
+        def _task():
+            self.is_downloading = True
+            self.status_var.set("状态: 正在下载新壁纸...")
+            try:
+                api_url = f"https://img.paulzzh.com/touhou/random?size={self.cfg['size']}&site={self.cfg['site']}"
+                req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    img_data = response.read()
+                
+                with open(TEMP_WALLPAPER_PATH, "wb") as f:
+                    f.write(img_data)
+                
+                set_wallpaper_windows(TEMP_WALLPAPER_PATH)
+                self.current_applied_wallpaper = TEMP_WALLPAPER_PATH
+                self.mode = "online" # 恢复在线轮播状态
+                self.status_var.set(f"状态: 在线壁纸更换成功 ({time.strftime('%H:%M:%S')})")
+            except Exception as e:
+                self.status_var.set(f"状态: 更换失败 ({str(e)})")
+            finally:
+                self.is_downloading = False
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def timer_loop(self):
+        """定时器循环检测"""
+        interval = self.cfg.get("interval_minutes", 30)
+        # 关键点：只有在 online 模式下才执行定时切换；favorite 模式下时间对其无效！
+        if self.mode == "online" and interval > 0:
+            now = time.time()
+            if not hasattr(self, "_last_refresh_time"):
+                self._last_refresh_time = now
+            elif now - self._last_refresh_time >= interval * 60:
+                self.fetch_and_set_wallpaper()
+                self._last_refresh_time = now
+
+        self.root.after(30 * 1000, self.timer_loop)
+
+    # ---------------- 托盘与退出 ----------------
     def init_tray_icon(self):
-        """创建 Windows 系统托盘图标与菜单"""
         menu = (
-            item('打开设置界面', self.show_window_from_tray, default=True), # default=True 表示支持双击托盘打开
-            item('立即换一张壁纸', lambda: self.fetch_and_set_wallpaper()),
-            item('退出并还原壁纸', lambda: self.root.after(0, self.quit_and_restore))
+            item('打开设置界面', lambda: self.root.after(0, self._restore_ui), default=True),
+            item('🎲 换一张在线壁纸', lambda: self.fetch_and_set_wallpaper()),
+            item('⭐ 收藏当前壁纸', lambda: self.root.after(0, self.favorite_current_wallpaper)),
+            item('❌ 退出并还原壁纸', lambda: self.root.after(0, self.quit_and_restore))
         )
         self.tray_icon = pystray.Icon("TouhouWallpaper", create_tray_icon_image(), "TH wallpaper", menu)
-        # 独立线程运行托盘图标，避免阻塞 Tkinter
         self.tray_icon.run_detached()
 
-    def show_window_from_tray(self):
-        """从托盘恢复显示窗口"""
-        self.root.after(0, self._restore_ui)
-
     def _restore_ui(self):
+        self.refresh_favorites_list()
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
 
     def hide_to_tray(self):
-        """隐藏窗口到托盘"""
         self.apply_settings(show_msg=False)
         self.root.withdraw()
 
@@ -235,7 +365,6 @@ class WallpaperApp:
             set_wallpaper_windows(orig_wp)
 
     def quit_and_restore(self):
-        """停止托盘，还原壁纸，彻底退出"""
         try:
             self.tray_icon.stop()
         except Exception:
@@ -243,43 +372,6 @@ class WallpaperApp:
         self.restore_original_wallpaper()
         self.root.destroy()
         sys.exit(0)
-
-    def fetch_and_set_wallpaper(self):
-        if self.is_downloading:
-            return
-        
-        def _task():
-            self.is_downloading = True
-            self.status_var.set("状态: 正在下载壁纸...")
-            try:
-                api_url = f"https://img.paulzzh.com/touhou/random?size={self.cfg['size']}&site={self.cfg['site']}"
-                req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=15) as response:
-                    img_data = response.read()
-                
-                with open(WALLPAPER_PATH, "wb") as f:
-                    f.write(img_data)
-                
-                set_wallpaper_windows(WALLPAPER_PATH)
-                self.status_var.set(f"状态: 壁纸更换成功 ({time.strftime('%H:%M:%S')})")
-            except Exception as e:
-                self.status_var.set(f"状态: 更换失败 ({str(e)})")
-            finally:
-                self.is_downloading = False
-
-        threading.Thread(target=_task, daemon=True).start()
-
-    def timer_loop(self):
-        interval = self.cfg.get("interval_minutes", 30)
-        if interval > 0:
-            now = time.time()
-            if not hasattr(self, "_last_refresh_time"):
-                self._last_refresh_time = now
-            elif now - self._last_refresh_time >= interval * 60:
-                self.fetch_and_set_wallpaper()
-                self._last_refresh_time = now
-
-        self.root.after(30 * 1000, self.timer_loop)
 
 
 if __name__ == "__main__":
