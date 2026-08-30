@@ -28,6 +28,15 @@ python wallpaper_changer.py
 python wallpaper_changer.py --silent
 ```
 
+## 项目结构
+
+```
+wallpaper_changer.py   入口：参数解析、单实例锁、启动主界面
+gui.py                 界面层：主窗口、星标面板、托盘菜单、全局快捷键与轮播计时
+wallpaper_service.py   服务层：壁纸设置/显示方式、在线下载（带重试）、星标收藏管理
+config.py              配置层：路径、默认配置的读写、开机自启注册表
+```
+
 ## 使用方法
 
 ### 界面操作
