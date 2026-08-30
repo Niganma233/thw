@@ -39,7 +39,8 @@ DEFAULT_CONFIG = {
     "original_wallpaper": "",
     "favorite_carousel": False,
     "hotkey_favorite": "",
-    "hotkey_switch": ""
+    "hotkey_switch": "",
+    "wallpaper_style": "fill"
 }
 
 def get_current_windows_wallpaper():
@@ -55,6 +56,27 @@ def set_wallpaper_windows(img_path):
     abs_path = os.path.abspath(img_path)
     ctypes.windll.user32.SystemParametersInfoW(20, 0, abs_path, 3)
     return True
+
+# 壁纸显示方式: 键 -> (WallpaperStyle, TileWallpaper)
+WALLPAPER_STYLES = {
+    "fill": (10, 0),     # 填充：裁剪填满整个屏幕（默认）
+    "fit": (6, 0),       # 适应：完整显示整张图，留黑边
+    "center": (0, 0),    # 居中
+    "stretch": (2, 0),   # 拉伸
+}
+
+def set_wallpaper_style(style_key):
+    """通过注册表 HKCU\\Control Panel\\Desktop 设置壁纸显示方式"""
+    wallpaper_style, tile_wallpaper = WALLPAPER_STYLES.get(style_key, WALLPAPER_STYLES["fill"])
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop", 0, winreg.KEY_SET_VALUE)
+        winreg.SetValueEx(key, "WallpaperStyle", 0, winreg.REG_SZ, str(wallpaper_style))
+        winreg.SetValueEx(key, "TileWallpaper", 0, winreg.REG_SZ, str(tile_wallpaper))
+        winreg.CloseKey(key)
+        return True
+    except Exception as e:
+        print(f"设置壁纸显示方式失败: {e}")
+        return False
 
 def fetch_with_retry(url, timeout=15, retries=3, backoff_base=2):
     """带重试机制的 urlopen 封装：最多尝试 retries 次，失败后按指数退避等待"""
@@ -117,11 +139,41 @@ def create_tray_icon_image():
     return image
 
 
+# ---------------- 单实例锁 ----------------
+_INSTANCE_LOCK_HANDLE = None
+
+def acquire_single_instance_lock():
+    """创建全局互斥锁保证程序单实例运行；已有实例返回 False"""
+    global _INSTANCE_LOCK_HANDLE
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+
+    mutex_name = "Global\\TouhouWallpaperAutoChanger"
+    handle = kernel32.CreateMutexW(None, False, mutex_name)
+    error = kernel32.GetLastError()
+    if error == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(handle)
+        return False
+    _INSTANCE_LOCK_HANDLE = handle
+    return True
+
+def _release_single_instance_lock():
+    """释放单实例互斥锁"""
+    global _INSTANCE_LOCK_HANDLE
+    if _INSTANCE_LOCK_HANDLE:
+        ctypes.windll.kernel32.CloseHandle(_INSTANCE_LOCK_HANDLE)
+        _INSTANCE_LOCK_HANDLE = None
+
+atexit.register(_release_single_instance_lock)
+
+
 class WallpaperApp:
     def __init__(self, root, silent=False):
         self.root = root
         self.root.title("TH wallpaper")
-        self.root.geometry("480x800")
+        self.root.geometry("480x840")
         self.root.resizable(False, False)
         
         self.cfg = load_config()
@@ -205,6 +257,20 @@ class WallpaperApp:
         ttk.Label(row_box, text="尺寸:").pack(side=tk.LEFT)
         self.size_var = tk.StringVar(value=self.cfg["size"])
         ttk.Combobox(row_box, textvariable=self.size_var, values=["pc", "mobile"], state="readonly", width=8).pack(side=tk.LEFT, padx=5)
+
+        style_row = ttk.Frame(api_frame)
+        style_row.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(style_row, text="显示方式:").pack(side=tk.LEFT)
+        self.style_map = {
+            "fill": "填充 (Fill)",
+            "fit": "适应 (Fit)",
+            "center": "居中 (Center)",
+            "stretch": "拉伸 (Stretch)",
+        }
+        cur_style = self.cfg.get("wallpaper_style", "fill")
+        cur_style_text = self.style_map.get(cur_style, self.style_map["fill"])
+        self.style_var = tk.StringVar(value=cur_style_text)
+        ttk.Combobox(style_row, textvariable=self.style_var, values=list(self.style_map.values()), state="readonly", width=12).pack(side=tk.LEFT, padx=5)
 
         # 4. ★ 星标/收藏管理面板 ★
         fav_frame = ttk.LabelFrame(frame, text="⭐ 星标收藏夹管理", padding=8)
@@ -522,14 +588,29 @@ class WallpaperApp:
         self.cfg["interval_minutes"] = self.interval_map[self.interval_var.get()]
         self.cfg["site"] = self.site_var.get()
         self.cfg["size"] = self.size_var.get()
+        for k, v in self.style_map.items():
+            if v == self.style_var.get():
+                self.cfg["wallpaper_style"] = k
+                break
+        else:
+            self.cfg["wallpaper_style"] = "fill"
         self.cfg["favorite_carousel"] = self.var_fav_carousel.get()
         self.cfg["hotkey_favorite"] = self.hk_fav_var.get().strip()
         self.cfg["hotkey_switch"] = self.hk_switch_var.get().strip()
         save_config(self.cfg)
         set_auto_start_registry(self.cfg["auto_start"])
         self.register_hotkeys()
+        self.apply_wallpaper_style(self.cfg["wallpaper_style"])
         if show_msg:
             messagebox.showinfo("成功", "设置已保存并生效！")
+
+    def apply_wallpaper_style(self, style_key=None):
+        """将壁纸显示方式写入注册表，并刷新当前壁纸使其立即生效"""
+        style_key = style_key or self.cfg.get("wallpaper_style", "fill")
+        if set_wallpaper_style(style_key):
+            cur = self.current_applied_wallpaper
+            if cur and os.path.exists(cur):
+                set_wallpaper_windows(cur)
 
     def restore_original_wallpaper(self):
         orig_wp = self.cfg.get("original_wallpaper", "")
@@ -553,6 +634,16 @@ class WallpaperApp:
 
 if __name__ == "__main__":
     is_silent = "--silent" in sys.argv
+
+    # 单实例锁：已有实例在运行时直接退出
+    if not acquire_single_instance_lock():
+        if not is_silent:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showinfo("提示", "程序已在运行中！")
+            root.destroy()
+        sys.exit(0)
+
     root = tk.Tk()
     app = WallpaperApp(root, silent=is_silent)
     root.mainloop()
