@@ -1,8 +1,9 @@
 import sys
 import ctypes
 import atexit
-import tkinter as tk
 from tkinter import messagebox
+
+import customtkinter as ctk
 
 import config
 from gui import WallpaperApp
@@ -46,13 +47,13 @@ def main():
     # 单实例锁：已有实例在运行时直接退出
     if not acquire_single_instance_lock():
         if not is_silent:
-            root = tk.Tk()
+            root = ctk.CTk()
             root.withdraw()
             messagebox.showinfo("提示", "程序已在运行中！")
             root.destroy()
         sys.exit(0)
 
-    root = tk.Tk()
+    root = ctk.CTk()
     app = WallpaperApp(root, silent=is_silent)
     root.mainloop()
 

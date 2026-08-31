@@ -4,11 +4,12 @@ import re
 import time
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import messagebox
 
+import customtkinter as ctk
 import pystray
 from pystray import MenuItem as item
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageDraw
 
 try:
     import keyboard
@@ -17,6 +18,9 @@ except ImportError:
 
 import config
 import wallpaper_service
+
+ctk.set_appearance_mode("system")
+ctk.set_default_color_theme("blue")
 
 
 def create_tray_icon_image():
@@ -33,7 +37,7 @@ class WallpaperApp:
     def __init__(self, root, silent=False):
         self.root = root
         self.root.title("TH wallpaper")
-        self.root.geometry("480x840")
+        self.root.geometry("480x880")
         self.root.resizable(False, False)
 
         self.cfg = config.load_config()
@@ -69,27 +73,27 @@ class WallpaperApp:
             self.root.withdraw()
 
     def init_ui(self):
-        frame = ttk.Frame(self.root, padding=15)
-        frame.pack(fill=tk.BOTH, expand=True)
+        container = ctk.CTkFrame(self.root, corner_radius=0, fg_color="transparent")
+        container.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
         # 1. 顶部状态
         self.status_var = tk.StringVar(value="状态: 在线轮播就绪")
-        ttk.Label(frame, textvariable=self.status_var, font=("Microsoft YaHei", 9, "bold")).pack(anchor=tk.W, pady=(0, 5))
+        ctk.CTkLabel(container, textvariable=self.status_var, font=("Microsoft YaHei", 12, "bold")).pack(anchor=tk.W, pady=(0, 8))
 
-        # 2. 刷新条件设置
-        cond_frame = ttk.LabelFrame(frame, text="自动轮播设置", padding=8)
-        cond_frame.pack(fill=tk.X, pady=4)
+        # 2. 自动轮播设置
+        cond_frame = ctk.CTkFrame(container, corner_radius=10)
+        cond_frame.pack(fill=tk.X, pady=6)
+        ctk.CTkLabel(cond_frame, text="自动轮播设置", font=("Microsoft YaHei", 11, "bold"), anchor="w").pack(anchor=tk.W, padx=14, pady=(10, 2))
 
         self.var_startup = tk.BooleanVar(value=self.cfg["refresh_on_startup"])
-        ttk.Checkbutton(cond_frame, text="开机 / 启动时立即刷新一次", variable=self.var_startup).pack(anchor=tk.W)
+        ctk.CTkCheckBox(cond_frame, text="开机 / 启动时立即刷新一次", variable=self.var_startup).pack(anchor=tk.W, padx=14, pady=3)
 
         self.var_autostart = tk.BooleanVar(value=self.cfg["auto_start"])
-        ttk.Checkbutton(cond_frame, text="开机时自动启动本程序", variable=self.var_autostart).pack(anchor=tk.W)
+        ctk.CTkCheckBox(cond_frame, text="开机时自动启动本程序", variable=self.var_autostart).pack(anchor=tk.W, padx=14, pady=3)
 
-        interval_box = ttk.Frame(cond_frame)
-        interval_box.pack(fill=tk.X, pady=2)
-        ttk.Label(interval_box, text="定时刷新间隔:").pack(side=tk.LEFT)
-
+        interval_box = ctk.CTkFrame(cond_frame, fg_color="transparent")
+        interval_box.pack(fill=tk.X, padx=14, pady=(4, 10))
+        ctk.CTkLabel(interval_box, text="定时刷新间隔:").pack(side=tk.LEFT)
         intervals = {
             "不自动定时": 0, "每 5 分钟": 5, "每 15 分钟": 15,
             "每 30 分钟": 30, "每 1 小时": 60, "每 2 小时": 120, "每 4 小时": 240
@@ -101,26 +105,25 @@ class WallpaperApp:
                 cur_text = k
                 break
         self.interval_var = tk.StringVar(value=cur_text)
-        self.combo_interval = ttk.Combobox(interval_box, textvariable=self.interval_var, values=list(intervals.keys()), state="readonly", width=12)
-        self.combo_interval.pack(side=tk.LEFT, padx=8)
+        ctk.CTkComboBox(interval_box, variable=self.interval_var, values=list(intervals.keys()), state="readonly", width=160).pack(side=tk.LEFT, padx=8)
 
-        # 3. 在线偏好设置
-        api_frame = ttk.LabelFrame(frame, text="在线图片偏好", padding=8)
-        api_frame.pack(fill=tk.X, pady=4)
+        # 3. 在线图片偏好
+        api_frame = ctk.CTkFrame(container, corner_radius=10)
+        api_frame.pack(fill=tk.X, pady=6)
+        ctk.CTkLabel(api_frame, text="在线图片偏好", font=("Microsoft YaHei", 11, "bold"), anchor="w").pack(anchor=tk.W, padx=14, pady=(10, 2))
 
-        row_box = ttk.Frame(api_frame)
-        row_box.pack(fill=tk.X)
-        ttk.Label(row_box, text="图源:").pack(side=tk.LEFT)
+        row_box = ctk.CTkFrame(api_frame, fg_color="transparent")
+        row_box.pack(fill=tk.X, padx=14, pady=4)
+        ctk.CTkLabel(row_box, text="图源:").pack(side=tk.LEFT)
         self.site_var = tk.StringVar(value=self.cfg["site"])
-        ttk.Combobox(row_box, textvariable=self.site_var, values=["all", "konachan", "yandere"], state="readonly", width=10).pack(side=tk.LEFT, padx=(5, 15))
-
-        ttk.Label(row_box, text="尺寸:").pack(side=tk.LEFT)
+        ctk.CTkComboBox(row_box, variable=self.site_var, values=["all", "konachan", "yandere"], state="readonly", width=120).pack(side=tk.LEFT, padx=(6, 16))
+        ctk.CTkLabel(row_box, text="尺寸:").pack(side=tk.LEFT)
         self.size_var = tk.StringVar(value=self.cfg["size"])
-        ttk.Combobox(row_box, textvariable=self.size_var, values=["pc", "mobile"], state="readonly", width=8).pack(side=tk.LEFT, padx=5)
+        ctk.CTkComboBox(row_box, variable=self.size_var, values=["pc", "mobile"], state="readonly", width=100).pack(side=tk.LEFT, padx=6)
 
-        style_row = ttk.Frame(api_frame)
-        style_row.pack(fill=tk.X, pady=(4, 0))
-        ttk.Label(style_row, text="显示方式:").pack(side=tk.LEFT)
+        style_row = ctk.CTkFrame(api_frame, fg_color="transparent")
+        style_row.pack(fill=tk.X, padx=14, pady=(2, 10))
+        ctk.CTkLabel(style_row, text="显示方式:").pack(side=tk.LEFT)
         self.style_map = {
             "fill": "填充 (Fill)",
             "fit": "适应 (Fit)",
@@ -130,126 +133,123 @@ class WallpaperApp:
         cur_style = self.cfg.get("wallpaper_style", "fill")
         cur_style_text = self.style_map.get(cur_style, self.style_map["fill"])
         self.style_var = tk.StringVar(value=cur_style_text)
-        ttk.Combobox(style_row, textvariable=self.style_var, values=list(self.style_map.values()), state="readonly", width=12).pack(side=tk.LEFT, padx=5)
+        ctk.CTkComboBox(style_row, variable=self.style_var, values=list(self.style_map.values()), state="readonly", width=140).pack(side=tk.LEFT, padx=6)
 
         # 4. ★ 星标/收藏管理面板 ★
-        fav_frame = ttk.LabelFrame(frame, text="⭐ 星标收藏夹管理", padding=8)
+        fav_frame = ctk.CTkFrame(container, corner_radius=10)
         fav_frame.pack(fill=tk.X, pady=6)
+        ctk.CTkLabel(fav_frame, text="⭐ 星标收藏夹管理", font=("Microsoft YaHei", 11, "bold"), anchor="w").pack(anchor=tk.W, padx=14, pady=(10, 2))
 
         # 收藏操作行
-        fav_op_box = ttk.Frame(fav_frame)
-        fav_op_box.pack(fill=tk.X, pady=2)
-        ttk.Button(fav_op_box, text="⭐ 收藏当前壁纸", command=self.favorite_current_wallpaper).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        ttk.Button(fav_op_box, text="📂 打开收藏文件夹", command=lambda: os.startfile(config.FAVORITES_DIR)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        fav_op_box = ctk.CTkFrame(fav_frame, fg_color="transparent")
+        fav_op_box.pack(fill=tk.X, padx=14, pady=4)
+        ctk.CTkButton(fav_op_box, text="⭐ 收藏当前壁纸", command=self.favorite_current_wallpaper).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ctk.CTkButton(fav_op_box, text="📂 打开收藏文件夹", command=lambda: os.startfile(config.FAVORITES_DIR)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
         self.var_fav_carousel = tk.BooleanVar(value=self.cfg.get("favorite_carousel", False))
-        ttk.Checkbutton(fav_frame, text="定时轮播星标壁纸（开启后收藏夹内壁纸按设置间隔自动切换）",
-                        variable=self.var_fav_carousel).pack(anchor=tk.W, pady=(2, 0))
+        ctk.CTkCheckBox(fav_frame, text="定时轮播星标壁纸（开启后收藏夹内壁纸按设置间隔自动切换）",
+                        variable=self.var_fav_carousel).pack(anchor=tk.W, padx=14, pady=3)
 
         # 收藏列表选择行
-        fav_sel_box = ttk.Frame(fav_frame)
-        fav_sel_box.pack(fill=tk.X, pady=4)
-        ttk.Label(fav_sel_box, text="已收藏壁纸:").pack(side=tk.LEFT)
+        fav_sel_box = ctk.CTkFrame(fav_frame, fg_color="transparent")
+        fav_sel_box.pack(fill=tk.X, padx=14, pady=4)
+        ctk.CTkLabel(fav_sel_box, text="已收藏壁纸:").pack(side=tk.LEFT)
         self.fav_combo_var = tk.StringVar()
-        self.fav_combo = ttk.Combobox(fav_sel_box, textvariable=self.fav_combo_var, state="readonly", width=22)
-        self.fav_combo.pack(side=tk.LEFT, padx=5)
+        self.fav_combo = ctk.CTkComboBox(fav_sel_box, variable=self.fav_combo_var, state="readonly", width=240)
+        self.fav_combo.pack(side=tk.LEFT, padx=6)
         self.fav_combo.bind("<<ComboboxSelected>>", lambda e: self.update_favorite_preview())
 
-        fav_action_box = ttk.Frame(fav_frame)
-        fav_action_box.pack(fill=tk.X, pady=2)
-        ttk.Button(fav_action_box, text="应用选中的星标壁纸", command=self.apply_selected_favorite).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        ttk.Button(fav_action_box, text="🗑️ 取消星标 (本地删除)", command=self.delete_selected_favorite).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        fav_action_box = ctk.CTkFrame(fav_frame, fg_color="transparent")
+        fav_action_box.pack(fill=tk.X, padx=14, pady=4)
+        ctk.CTkButton(fav_action_box, text="应用选中的星标壁纸", command=self.apply_selected_favorite).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ctk.CTkButton(fav_action_box, text="🗑️ 取消星标 (本地删除)", command=self.delete_selected_favorite).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
         # 星标壁纸预览图
-        self.preview_canvas = tk.Canvas(fav_frame, width=400, height=180, bg="#f0f0f0",
-                                        highlightthickness=1, highlightbackground="#c0c0c0")
-        self.preview_canvas.pack(fill=tk.X, pady=4)
+        self.preview_label = ctk.CTkLabel(fav_frame, text="暂无预览", width=400, height=180,
+                                          corner_radius=8, fg_color=("gray85", "gray20"))
+        self.preview_label.pack(padx=14, pady=(4, 12))
         self._preview_img = None
         self.update_favorite_preview()
 
         # 5. 全局快捷键设置（默认不设置，需用户自行填写）
-        hk_frame = ttk.LabelFrame(frame, text="⌨ 全局快捷键（默认不设置，需自行填写）", padding=8)
-        hk_frame.pack(fill=tk.X, pady=4)
+        hk_frame = ctk.CTkFrame(container, corner_radius=10)
+        hk_frame.pack(fill=tk.X, pady=6)
+        ctk.CTkLabel(hk_frame, text="⌨ 全局快捷键（默认不设置，需自行填写）", font=("Microsoft YaHei", 11, "bold"), anchor="w").pack(anchor=tk.W, padx=14, pady=(10, 2))
 
-        hk_row1 = ttk.Frame(hk_frame)
-        hk_row1.pack(fill=tk.X, pady=2)
-        ttk.Label(hk_row1, text="收藏当前壁纸:").pack(side=tk.LEFT)
+        hk_row1 = ctk.CTkFrame(hk_frame, fg_color="transparent")
+        hk_row1.pack(fill=tk.X, padx=14, pady=4)
+        ctk.CTkLabel(hk_row1, text="收藏当前壁纸:").pack(side=tk.LEFT)
         self.hk_fav_var = tk.StringVar(value=self.cfg.get("hotkey_favorite", ""))
-        ttk.Entry(hk_row1, textvariable=self.hk_fav_var, width=24).pack(side=tk.LEFT, padx=5)
+        ctk.CTkEntry(hk_row1, textvariable=self.hk_fav_var, width=210).pack(side=tk.LEFT, padx=6)
 
-        hk_row2 = ttk.Frame(hk_frame)
-        hk_row2.pack(fill=tk.X, pady=2)
-        ttk.Label(hk_row2, text="切换在线壁纸:").pack(side=tk.LEFT)
+        hk_row2 = ctk.CTkFrame(hk_frame, fg_color="transparent")
+        hk_row2.pack(fill=tk.X, padx=14, pady=4)
+        ctk.CTkLabel(hk_row2, text="切换在线壁纸:").pack(side=tk.LEFT)
         self.hk_switch_var = tk.StringVar(value=self.cfg.get("hotkey_switch", ""))
-        ttk.Entry(hk_row2, textvariable=self.hk_switch_var, width=24).pack(side=tk.LEFT, padx=5)
+        ctk.CTkEntry(hk_row2, textvariable=self.hk_switch_var, width=210).pack(side=tk.LEFT, padx=6)
 
-        ttk.Label(hk_frame, text="提示：例如 ctrl+shift+s / ctrl+shift+f，点击保存设置后生效。",
-                  foreground="#888888").pack(anchor=tk.W)
+        ctk.CTkLabel(hk_frame, text="提示：例如 ctrl+shift+s / ctrl+shift+f，点击保存设置后生效。",
+                     text_color=("gray45", "gray55")).pack(anchor=tk.W, padx=14, pady=(0, 12))
 
         # 6. 底部主控制按钮
-        btn_frame = ttk.Frame(frame)
+        btn_frame = ctk.CTkFrame(container, fg_color="transparent")
         btn_frame.pack(fill=tk.X, pady=10)
 
-        ttk.Button(btn_frame, text="🎲 换一张在线壁纸", command=self.fetch_and_set_wallpaper).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        ttk.Button(btn_frame, text="💾 保存设置", command=self.apply_settings).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        ttk.Button(btn_frame, text="🗕 最小化到托盘", command=self.hide_to_tray).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        ttk.Button(btn_frame, text="❌ 退出并还原", command=self.quit_and_restore).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ctk.CTkButton(btn_frame, text="🎲 换一张在线壁纸", command=self.fetch_and_set_wallpaper).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
+        ctk.CTkButton(btn_frame, text="💾 保存设置", command=self.apply_settings).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
+        ctk.CTkButton(btn_frame, text="🗕 最小化到托盘", command=self.hide_to_tray).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
+        ctk.CTkButton(btn_frame, text="❌ 退出并还原", command=self.quit_and_restore).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
 
     # ---------------- 收藏 / 星标逻辑 ----------------
     def refresh_favorites_list(self):
         """刷新收藏下拉框"""
         files = wallpaper_service.list_favorites()
-        self.fav_combo['values'] = files
+        self.fav_combo.configure(values=files)
         if files:
             if not self.fav_combo_var.get() or self.fav_combo_var.get() not in files:
-                self.fav_combo.current(0)
+                self.fav_combo.set(files[0])
         else:
             self.fav_combo_var.set("暂无收藏壁纸")
         self.update_favorite_preview()
 
     def update_favorite_preview(self):
         """刷新星标壁纸预览图"""
-        self.preview_canvas.delete("all")
         self._preview_img = None
 
         filename = self.fav_combo_var.get()
         if not filename or filename == "暂无收藏壁纸":
-            self.preview_canvas.create_text(200, 90, text="暂无预览", fill="#888888")
+            self.preview_label.configure(image=None, text="暂无预览")
             return
 
         fav_path = os.path.join(config.FAVORITES_DIR, filename)
         if not os.path.exists(fav_path):
-            self.preview_canvas.create_text(200, 90, text="文件不存在", fill="#888888")
+            self.preview_label.configure(image=None, text="文件不存在")
             return
 
         try:
             img = Image.open(fav_path)
-            img.thumbnail((398, 178))
-            self._preview_img = ImageTk.PhotoImage(img)
-            self.preview_canvas.create_image((400 - img.width) // 2, (180 - img.height) // 2,
-                                             anchor=tk.NW, image=self._preview_img)
+            img.thumbnail((390, 170))
+            self._preview_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+            self.preview_label.configure(image=self._preview_img, text="")
         except Exception:
-            self.preview_canvas.create_text(200, 90, text="无法预览", fill="#888888")
+            self.preview_label.configure(image=None, text="无法预览")
 
     def favorite_current_wallpaper(self):
         """星标收藏当前壁纸（收藏时可为壁纸重命名）"""
         if not self.current_applied_wallpaper or not os.path.exists(self.current_applied_wallpaper):
-            messagebox.showwarning("提示", "当前没有正在显示的有效壁纸！")
+            messagebox.showwarning("提示", "当前没有正在显示的有效壁纸！", parent=self.root)
             return
 
         # 如果当前壁纸已经在收藏夹中
         if os.path.dirname(os.path.abspath(self.current_applied_wallpaper)) == os.path.abspath(config.FAVORITES_DIR):
-            messagebox.showinfo("提示", "这张壁纸已经在你的星标收藏夹中了！")
+            messagebox.showinfo("提示", "这张壁纸已经在你的星标收藏夹中了！", parent=self.root)
             return
 
         # 收藏时弹出命名对话框，为壁纸重命名
         default_name = f"fav_{time.strftime('%Y%m%d_%H%M%S')}"
-        new_name = simpledialog.askstring(
-            "星标命名",
-            "为这张星标壁纸命名（将作为收藏夹中的文件名）:",
-            initialvalue=default_name,
-            parent=self.root
-        )
+        dialog = ctk.CTkInputDialog(text="为这张星标壁纸命名（将作为收藏夹中的文件名）:", title="星标命名")
+        dialog._entry.insert(0, default_name)
+        new_name = dialog.get_input()
         if new_name is None:  # 用户取消收藏
             return
         new_name = new_name.strip() or default_name
@@ -269,13 +269,13 @@ class WallpaperApp:
         self.update_favorite_preview()
         self.reset_refresh_timer()
         self.status_var.set(f"状态: ⭐ 已收藏并锁定壁纸 [{fav_filename}]（定时轮播已暂停）")
-        messagebox.showinfo("收藏成功", f"壁纸已加入星标收藏！\n定时轮播已暂停，将持续锁定本壁纸。")
+        messagebox.showinfo("收藏成功", f"壁纸已加入星标收藏！\n定时轮播已暂停，将持续锁定本壁纸。", parent=self.root)
 
     def apply_selected_favorite(self):
         """使用选中的星标壁纸（进入星标模式）"""
         filename = self.fav_combo_var.get()
         if not filename or filename == "暂无收藏壁纸":
-            messagebox.showwarning("提示", "请先选择一张有效的星标壁纸！")
+            messagebox.showwarning("提示", "请先选择一张有效的星标壁纸！", parent=self.root)
             return
 
         fav_path = os.path.join(config.FAVORITES_DIR, filename)
@@ -310,7 +310,7 @@ class WallpaperApp:
         if not filename or filename == "暂无收藏壁纸":
             return
 
-        if not messagebox.askyesno("确认删除", f"确定要取消星标并从本地永久删除图片【{filename}】吗？"):
+        if not messagebox.askyesno("确认删除", f"确定要取消星标并从本地永久删除图片【{filename}】吗？", parent=self.root):
             return
 
         fav_path = os.path.join(config.FAVORITES_DIR, filename)
@@ -321,12 +321,12 @@ class WallpaperApp:
 
             self.refresh_favorites_list()
             self.update_favorite_preview()
-            messagebox.showinfo("提示", "已取消星标并删除本地文件！")
+            messagebox.showinfo("提示", "已取消星标并删除本地文件！", parent=self.root)
 
             if is_current:
                 self.fetch_and_set_wallpaper()
         except Exception as e:
-            messagebox.showerror("错误", f"删除失败: {e}")
+            messagebox.showerror("错误", f"删除失败: {e}", parent=self.root)
 
     # ---------------- 在线拉取与壁纸设置 ----------------
     def reset_refresh_timer(self):
@@ -449,7 +449,7 @@ class WallpaperApp:
         self.register_hotkeys()
         self.apply_wallpaper_style(self.cfg["wallpaper_style"])
         if show_msg:
-            messagebox.showinfo("成功", "设置已保存并生效！")
+            messagebox.showinfo("成功", "设置已保存并生效！", parent=self.root)
 
     def apply_wallpaper_style(self, style_key=None):
         """将壁纸显示方式写入注册表，并刷新当前壁纸使其立即生效"""
