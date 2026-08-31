@@ -271,8 +271,12 @@ class WallpaperApp:
         self.fav_combo_var.set(fav_filename)
         self.update_favorite_preview()
         self.reset_refresh_timer()
-        self.status_var.set(f"状态: ⭐ 已收藏并锁定壁纸 [{fav_filename}]（定时轮播已暂停）")
-        messagebox.showinfo("收藏成功", f"壁纸已加入星标收藏！\n定时轮播已暂停，将持续锁定本壁纸。", parent=self.root)
+        if self.cfg.get("favorite_carousel", False):
+            self.status_var.set(f"状态: ⭐ 已收藏壁纸 [{fav_filename}]（开启星标轮播）")
+            messagebox.showinfo("收藏成功", f"壁纸已加入星标收藏！\n已开启星标轮播，将按设置间隔自动切换。", parent=self.root)
+        else:
+            self.status_var.set(f"状态: ⭐ 已收藏壁纸 [{fav_filename}]（定时将自动恢复在线壁纸）")
+            messagebox.showinfo("收藏成功", f"壁纸已加入星标收藏！\n定时轮播将自动恢复在线壁纸。", parent=self.root)
 
     def apply_selected_favorite(self):
         """使用选中的星标壁纸（进入星标模式）"""
@@ -290,13 +294,15 @@ class WallpaperApp:
             if self.cfg.get("favorite_carousel", False):
                 self.status_var.set(f"状态: ⭐ 使用星标壁纸 [{filename}]（开启星标轮播）")
             else:
-                self.status_var.set(f"状态: ⭐ 使用星标壁纸 [{filename}]（定时轮播已暂停）")
+                self.status_var.set(f"状态: ⭐ 使用星标壁纸 [{filename}]（定时将自动恢复在线壁纸）")
             self.update_favorite_preview()
 
     def cycle_favorite(self):
-        """星标轮播：切换到收藏夹中的下一张壁纸"""
+        """星标轮播：切换到收藏夹中的下一张壁纸（并重置轮播计时）"""
         files = wallpaper_service.list_favorites()
         if not files:
+            # 无收藏时也重置计时，避免定时器在该分支反复空转
+            self.reset_refresh_timer()
             return
         cur = self.fav_combo_var.get()
         try:
@@ -306,6 +312,8 @@ class WallpaperApp:
             nxt = files[0]
         self.fav_combo_var.set(nxt)
         self.apply_selected_favorite()
+        # 显式重置计时器，保证星标轮播持续按间隔进行
+        self.reset_refresh_timer()
 
     def delete_selected_favorite(self):
         """取消星标并从本地物理删除文件"""
@@ -373,13 +381,14 @@ class WallpaperApp:
     def timer_loop(self):
         """定时器循环检测（基于绝对时间戳判断）"""
         interval = self.cfg.get("interval_minutes", 30)
-        # 关键点：online 模式按绝对时间戳触发在线下载；favorite 模式仅在开启星标轮播时
-        # 自动切换收藏夹壁纸。判断依据均为 _next_refresh_time。
+        # 定时器在所有模式下都保持工作：
+        #  - favorite 且开启星标轮播 -> 切换下一张星标壁纸
+        #  - 其余情况（含 favorite 但未开启星标轮播）-> 拉取在线壁纸
         if interval > 0 and time.time() >= self._next_refresh_time:
-            if self.mode == "online":
-                self.fetch_and_set_wallpaper()
-            elif self.mode == "favorite" and self.cfg.get("favorite_carousel", False):
+            if self.mode == "favorite" and self.cfg.get("favorite_carousel", False):
                 self.cycle_favorite()
+            else:
+                self.fetch_and_set_wallpaper()
 
         self.root.after(30 * 1000, self.timer_loop)
 
