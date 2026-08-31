@@ -37,7 +37,7 @@ class WallpaperApp:
     def __init__(self, root, silent=False):
         self.root = root
         self.root.title("TH wallpaper")
-        self.root.geometry("480x880")
+        self.root.geometry("480x950")
         self.root.resizable(False, False)
 
         self.cfg = config.load_config()
@@ -155,9 +155,9 @@ class WallpaperApp:
         fav_sel_box.pack(fill=tk.X, padx=14, pady=4)
         ctk.CTkLabel(fav_sel_box, text="已收藏壁纸:").pack(side=tk.LEFT)
         self.fav_combo_var = tk.StringVar()
-        self.fav_combo = ctk.CTkComboBox(fav_sel_box, variable=self.fav_combo_var, state="readonly", width=240)
+        self.fav_combo = ctk.CTkComboBox(fav_sel_box, variable=self.fav_combo_var, state="readonly", width=240,
+                                         command=lambda choice: self.update_favorite_preview())
         self.fav_combo.pack(side=tk.LEFT, padx=6)
-        self.fav_combo.bind("<<ComboboxSelected>>", lambda e: self.update_favorite_preview())
 
         fav_action_box = ctk.CTkFrame(fav_frame, fg_color="transparent")
         fav_action_box.pack(fill=tk.X, padx=14, pady=4)
@@ -165,7 +165,7 @@ class WallpaperApp:
         ctk.CTkButton(fav_action_box, text="🗑️ 取消星标 (本地删除)", command=self.delete_selected_favorite).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
         # 星标壁纸预览图
-        self.preview_label = ctk.CTkLabel(fav_frame, text="暂无预览", width=400, height=180,
+        self.preview_label = ctk.CTkLabel(fav_frame, text="暂无预览", width=400, height=160,
                                           corner_radius=8, fg_color=("gray85", "gray20"))
         self.preview_label.pack(padx=14, pady=(4, 12))
         self._preview_img = None
@@ -194,11 +194,13 @@ class WallpaperApp:
         # 6. 底部主控制按钮
         btn_frame = ctk.CTkFrame(container, fg_color="transparent")
         btn_frame.pack(fill=tk.X, pady=10)
+        for i in range(4):
+            btn_frame.grid_columnconfigure(i, weight=1, uniform="btn_col")
 
-        ctk.CTkButton(btn_frame, text="🎲 换一张在线壁纸", command=self.fetch_and_set_wallpaper).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
-        ctk.CTkButton(btn_frame, text="💾 保存设置", command=self.apply_settings).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
-        ctk.CTkButton(btn_frame, text="🗕 最小化到托盘", command=self.hide_to_tray).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
-        ctk.CTkButton(btn_frame, text="❌ 退出并还原", command=self.quit_and_restore).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
+        ctk.CTkButton(btn_frame, text="🎲 换一张在线壁纸", command=self.fetch_and_set_wallpaper).grid(row=0, column=0, sticky="ew", padx=3)
+        ctk.CTkButton(btn_frame, text="💾 保存设置", command=self.apply_settings).grid(row=0, column=1, sticky="ew", padx=3)
+        ctk.CTkButton(btn_frame, text="🗕 最小化到托盘", command=self.hide_to_tray).grid(row=0, column=2, sticky="ew", padx=3)
+        ctk.CTkButton(btn_frame, text="❌ 退出并还原", command=self.quit_and_restore).grid(row=0, column=3, sticky="ew", padx=3)
 
     # ---------------- 收藏 / 星标逻辑 ----------------
     def refresh_favorites_list(self):
@@ -228,7 +230,7 @@ class WallpaperApp:
 
         try:
             img = Image.open(fav_path)
-            img.thumbnail((390, 170))
+            img.thumbnail((390, 150))
             self._preview_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
             self.preview_label.configure(image=self._preview_img, text="")
         except Exception:
