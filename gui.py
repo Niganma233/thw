@@ -248,7 +248,8 @@ class WallpaperApp:
         # 收藏时弹出命名对话框，为壁纸重命名
         default_name = f"fav_{time.strftime('%Y%m%d_%H%M%S')}"
         dialog = ctk.CTkInputDialog(text="为这张星标壁纸命名（将作为收藏夹中的文件名）:", title="星标命名")
-        dialog._entry.insert(0, default_name)
+        # CTkInputDialog 的控件是 after(10) 延迟创建的，需稍后预填默认名
+        dialog.after(50, lambda: dialog._entry.insert(0, default_name))
         new_name = dialog.get_input()
         if new_name is None:  # 用户取消收藏
             return
