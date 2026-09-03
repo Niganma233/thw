@@ -1,29 +1,26 @@
-import sys
-import ctypes
 import atexit
+import ctypes
+import sys
 from tkinter import messagebox
 
 import customtkinter as ctk
 
-import config
 from gui import WallpaperApp
 
-# 单实例锁
 _INSTANCE_LOCK_HANDLE = None
 
 
 def acquire_single_instance_lock():
-    """创建全局互斥锁保证程序单实例运行；已有实例返回 False"""
     global _INSTANCE_LOCK_HANDLE
     kernel32 = ctypes.windll.kernel32
     kernel32.CreateMutexW.restype = ctypes.c_void_p
     kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
-    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-
+    kernel32.GetLastError.restype = ctypes.c_ulong
     mutex_name = "Global\\TouhouWallpaperAutoChanger"
     handle = kernel32.CreateMutexW(None, False, mutex_name)
-    error = kernel32.GetLastError()
-    if error == 183:  # ERROR_ALREADY_EXISTS
+    if not handle:
+        return False
+    if kernel32.GetLastError() == 183:
         kernel32.CloseHandle(handle)
         return False
     _INSTANCE_LOCK_HANDLE = handle
@@ -31,11 +28,12 @@ def acquire_single_instance_lock():
 
 
 def _release_single_instance_lock():
-    """释放单实例互斥锁"""
     global _INSTANCE_LOCK_HANDLE
     if _INSTANCE_LOCK_HANDLE:
-        ctypes.windll.kernel32.CloseHandle(_INSTANCE_LOCK_HANDLE)
-        _INSTANCE_LOCK_HANDLE = None
+        try:
+            ctypes.windll.kernel32.CloseHandle(_INSTANCE_LOCK_HANDLE)
+        finally:
+            _INSTANCE_LOCK_HANDLE = None
 
 
 atexit.register(_release_single_instance_lock)
@@ -43,18 +41,15 @@ atexit.register(_release_single_instance_lock)
 
 def main():
     is_silent = "--silent" in sys.argv
-
-    # 单实例锁：已有实例在运行时直接退出
     if not acquire_single_instance_lock():
         if not is_silent:
             root = ctk.CTk()
             root.withdraw()
-            messagebox.showinfo("提示", "程序已在运行中！")
+            messagebox.showinfo("Touhou Wallpaper", "程序已经在运行中。")
             root.destroy()
-        sys.exit(0)
-
+        return
     root = ctk.CTk()
-    app = WallpaperApp(root, silent=is_silent)
+    WallpaperApp(root, silent=is_silent)
     root.mainloop()
 
 
