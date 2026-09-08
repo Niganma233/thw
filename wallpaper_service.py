@@ -14,28 +14,7 @@ from PIL import Image
 from config import CACHE_DIR, FAVORITES_DIR
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
-
-WALLPAPER_STYLES = {
-    "fill": (10, 0),
-    "fit": (6, 0),
-    "center": (0, 0),
-    "stretch": (2, 0),
-}
-
-BUILTIN_SOURCES = {
-    "all": {
-        "name": "东方随机图（全部）",
-        "url": "https://img.paulzzh.com/touhou/random?size={size}&site=all",
-    },
-    "konachan": {
-        "name": "东方随机图（Konachan）",
-        "url": "https://img.paulzzh.com/touhou/random?size={size}&site=konachan",
-    },
-    "yandere": {
-        "name": "东方随机图（Yande.re）",
-        "url": "https://img.paulzzh.com/touhou/random?size={size}&site=yandere",
-    },
-}
+WALLPAPER_STYLES = {"fill": (10, 0), "fit": (6, 0), "center": (0, 0), "stretch": (2, 0)}
 
 
 def get_current_windows_wallpaper():
@@ -47,9 +26,7 @@ def get_current_windows_wallpaper():
 def set_wallpaper_windows(img_path):
     if not img_path or not os.path.isfile(img_path):
         return False
-    abs_path = os.path.abspath(img_path)
-    result = ctypes.windll.user32.SystemParametersInfoW(20, 0, abs_path, 3)
-    return bool(result)
+    return bool(ctypes.windll.user32.SystemParametersInfoW(20, 0, os.path.abspath(img_path), 3))
 
 
 def set_wallpaper_style(style_key):
@@ -70,20 +47,17 @@ def set_wallpaper_style(style_key):
 
 def fetch_with_retry(url, timeout=15, retries=3, backoff_base=2):
     last_exc = None
-    for attempt in range(retries):
+    for attempt in range(max(1, retries)):
         try:
             parsed = urlparse(url)
             if parsed.scheme not in ("http", "https") or not parsed.netloc:
                 raise ValueError("只支持 http:// 或 https:// 图源地址")
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
-            )
+            req = urllib.request.Request(url, headers={"User-Agent": "TouhouWallpaper/3.0"})
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 return response.read(), response.headers.get_content_type()
         except Exception as exc:
             last_exc = exc
-            if attempt < retries - 1:
+            if attempt < max(1, retries) - 1:
                 time.sleep(backoff_base ** attempt)
     raise last_exc
 
@@ -92,9 +66,7 @@ def _detect_extension(img_data):
     with Image.open(io.BytesIO(img_data)) as img:
         img.verify()
         fmt = (img.format or "JPEG").upper()
-    return {
-        "JPEG": ".jpg", "JPG": ".jpg", "PNG": ".png", "WEBP": ".webp", "BMP": ".bmp"
-    }.get(fmt, ".jpg")
+    return {"JPEG": ".jpg", "JPG": ".jpg", "PNG": ".png", "WEBP": ".webp", "BMP": ".bmp"}.get(fmt, ".jpg")
 
 
 def _resolve_json_image_url(data):
@@ -111,12 +83,11 @@ def _resolve_json_image_url(data):
 
 
 def fetch_source_image(url, timeout=15, retries=3):
-    data, content_type = fetch_with_retry(url, timeout=timeout, retries=retries)
+    data, _ = fetch_with_retry(url, timeout=timeout, retries=retries)
     try:
         _detect_extension(data)
         return data
     except Exception:
-        # 兼容最常见的 JSON 图源：{"url": "https://.../image.jpg"}
         image_url = _resolve_json_image_url(data)
         if not image_url:
             raise ValueError("图源没有直接返回图片，也没有找到可用的图片 URL")
@@ -135,13 +106,9 @@ def build_source_url(source_url, site="all", size="pc"):
         raise ValueError(f"图源 URL 模板格式错误：{exc}") from exc
 
 
-def _cleanup_cache(keep_path, max_files=12):
+def _cleanup_cache(keep_path, max_files=16):
     try:
-        files = [
-            os.path.join(CACHE_DIR, name)
-            for name in os.listdir(CACHE_DIR)
-            if name.lower().endswith(IMAGE_EXTENSIONS)
-        ]
+        files = [os.path.join(CACHE_DIR, name) for name in os.listdir(CACHE_DIR) if name.lower().endswith(IMAGE_EXTENSIONS)]
         files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
         protected = os.path.abspath(keep_path) if keep_path else ""
         for path in files[max_files:]:
@@ -157,7 +124,6 @@ def _cleanup_cache(keep_path, max_files=12):
 
 def _write_wallpaper_file(img_data):
     ext = _detect_extension(img_data)
-    # Windows 桌面壁纸更稳妥地使用 JPG/PNG；WebP/BMP 转为 PNG。
     if ext in (".webp", ".bmp"):
         with Image.open(io.BytesIO(img_data)) as img:
             out = io.BytesIO()
@@ -176,13 +142,77 @@ def _write_wallpaper_file(img_data):
     return path
 
 
-def download_wallpaper(site, size, source_url=None, timeout=15, retries=3):
-    if source_url is None:
-        source_url = BUILTIN_SOURCES.get(site, BUILTIN_SOURCES["all"])["url"]
-    url = build_source_url(source_url, site=site, size=size)
+def download_wallpaper(source, size_override=None, timeout=None, retries=None):
+    """按图源对象下载。size/timeout/retries 都可以由图源独立控制。"""
+    site = source.get("site", "all")
+    size = size_override or source.get("size", "pc")
+    timeout = int(timeout if timeout is not None else source.get("timeout", 15))
+    retries = int(retries if retries is not None else source.get("retries", 3))
+    url = build_source_url(source["url"], site=site, size=size)
     img_data = fetch_source_image(url, timeout=timeout, retries=retries)
     return _write_wallpaper_file(img_data)
 
+
+
+def get_cache_info():
+    """返回缓存图片数量和总字节数。"""
+    total = 0
+    count = 0
+    try:
+        for name in os.listdir(CACHE_DIR):
+            if not name.lower().endswith(IMAGE_EXTENSIONS):
+                continue
+            path = os.path.join(CACHE_DIR, name)
+            if os.path.isfile(path):
+                count += 1
+                try:
+                    total += os.path.getsize(path)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return count, total
+
+
+def format_bytes(size):
+    """将字节数格式化为适合 UI 显示的文本。"""
+    value = float(max(0, size))
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+
+
+def clear_cache(keep_path=None):
+    """清理缓存图片；keep_path 用于保护当前正在使用的壁纸。
+
+    返回 (删除文件数, 释放字节数, 失败文件数)。
+    """
+    protected = os.path.abspath(keep_path) if keep_path and os.path.isfile(keep_path) else ""
+    deleted = 0
+    freed = 0
+    failed = 0
+    try:
+        names = os.listdir(CACHE_DIR)
+    except OSError:
+        return 0, 0, 0
+
+    for name in names:
+        if not name.lower().endswith(IMAGE_EXTENSIONS):
+            continue
+        path = os.path.join(CACHE_DIR, name)
+        if os.path.abspath(path) == protected:
+            continue
+        if not os.path.isfile(path):
+            continue
+        try:
+            size = os.path.getsize(path)
+            os.remove(path)
+            deleted += 1
+            freed += size
+        except OSError:
+            failed += 1
+    return deleted, freed, failed
 
 def list_favorites():
     try:
@@ -214,13 +244,11 @@ def save_favorite(src_path, name):
 
 
 def delete_favorite(filename):
-    if not filename:
+    safe_name = os.path.basename(filename or "")
+    if not safe_name or safe_name != filename:
         return False
-    safe_name = os.path.basename(filename)
-    if safe_name != filename:
-        return False
-    fav_path = os.path.join(FAVORITES_DIR, safe_name)
-    if os.path.isfile(fav_path):
-        os.remove(fav_path)
+    path = os.path.join(FAVORITES_DIR, safe_name)
+    if os.path.isfile(path):
+        os.remove(path)
         return True
     return False
