@@ -33,7 +33,7 @@ class WallpaperApp:
         self.root = root
         self.root.title("Touhou Wallpaper")
         self.root.geometry("1040x760")
-        self.root.minsize(940, 700)
+        self.root.minsize(940, 840)
         self.root.resizable(True, True)
 
         self.cfg = config.load_config()
