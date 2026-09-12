@@ -96,9 +96,4 @@ pyinstaller -F -w wallpaper_changer.py
 - 本项目使用 vibe coding。
 
 ## 致谢
-
-<<<<<<< HEAD
 本项目中的东方 Project 相关图片素材，通过 东方 Project 随机图片 [API](https://img.paulzzh.com) 获取。**感谢该 API 的维护者**。
-=======
-本项目中的东方 Project 相关图片素材，通过 东方 Project 随机图片 API（https://img.paulzzh.com） 获取。**感谢该 API 的维护者**。
->>>>>>> 82a3127157721454589fa3b077350d2f25008cd0
