@@ -32,7 +32,7 @@ class WallpaperApp:
     def __init__(self, root, silent=False):
         self.root = root
         self.root.title("Touhou Wallpaper")
-        self.root.geometry("1040x760")
+        self.root.geometry("1040x900")
         self.root.minsize(940, 840)
         self.root.resizable(True, True)
 
@@ -122,6 +122,16 @@ class WallpaperApp:
         ctk.CTkButton(footer, text="退出并还原壁纸", width=140, height=34, fg_color="#b44", hover_color="#933", command=self.quit_and_restore).pack(side=tk.RIGHT)
 
     # ---------- 视图回调 ----------
+    def on_favorite_behavior_changed(self, behavior):
+        """收藏行为设置改变后立即更新当前模式的计时策略。"""
+        if behavior not in {"pause", "carousel", "online"}:
+            behavior = "pause"
+        self.cfg["favorite_behavior"] = behavior
+        self.cfg["favorite_carousel"] = behavior == "carousel"
+        if self.mode == "favorite":
+            self.reset_refresh_timer()
+        self._update_countdown()
+
     def _source_changed(self, save=False):
         self.source_manager = SourceManager(self.cfg)
         if save:
@@ -217,7 +227,18 @@ class WallpaperApp:
         self.set_status(f"换图失败：{payload}", "error")
 
     # ---------- 定时 ----------
+    def _favorite_behavior(self):
+        behavior = self.cfg.get("favorite_behavior")
+        if behavior in {"pause", "carousel", "online"}:
+            return behavior
+        # 兼容旧版配置
+        return "carousel" if self.cfg.get("favorite_carousel", False) else "online"
+
     def reset_refresh_timer(self):
+        # 收藏模式下选择“暂停自动刷新”时，使用无穷远时间戳。
+        if self.mode == "favorite" and self._favorite_behavior() == "pause":
+            self._next_refresh_time = float("inf")
+            return
         interval = max(0, int(self.cfg.get("interval_minutes", 30)))
         self._next_refresh_time = time.time() + interval * 60 if interval > 0 else float("inf")
 
@@ -227,6 +248,20 @@ class WallpaperApp:
         base = max(60, int(self.cfg.get("interval_minutes", 30)) * 60)
         wait = min(30 * (2 ** max(0, self._consecutive_failures - 1)), base)
         self._next_refresh_time = time.time() + wait
+
+    def _update_countdown(self):
+        if self.is_downloading:
+            self.countdown_var.set("正在获取下一张壁纸…")
+            return
+        if self.mode == "favorite" and self._favorite_behavior() == "pause":
+            self.countdown_var.set("收藏模式：已暂停自动刷新")
+            return
+        interval = int(self.cfg.get("interval_minutes", 30))
+        if interval <= 0:
+            self.countdown_var.set("自动刷新：已关闭")
+            return
+        remain = max(0, int(self._next_refresh_time - time.time()))
+        self.countdown_var.set(f"下次刷新：{remain // 60:02d}:{remain % 60:02d}")
 
     def timer_loop(self):
         if self._closing:
@@ -241,20 +276,15 @@ class WallpaperApp:
             elif event[0] == "error":
                 self._download_result(False, event[1])
 
-        if self.is_downloading:
-            self.countdown_var.set("正在获取下一张壁纸…")
-        else:
-            interval = int(self.cfg.get("interval_minutes", 30))
-            if interval <= 0:
-                self.countdown_var.set("自动刷新：已关闭")
+        if not self.is_downloading and time.time() >= self._next_refresh_time:
+            behavior = self._favorite_behavior()
+            if self.mode == "favorite" and behavior == "pause":
+                self._next_refresh_time = float("inf")
+            elif self.mode == "favorite" and behavior == "carousel":
+                self._cycle_favorite()
             else:
-                remain = max(0, int(self._next_refresh_time - time.time()))
-                self.countdown_var.set(f"下次刷新：{remain // 60:02d}:{remain % 60:02d}")
-                if time.time() >= self._next_refresh_time:
-                    if self.mode == "favorite" and self.cfg.get("favorite_carousel", False):
-                        self._cycle_favorite()
-                    else:
-                        self.fetch_and_set_wallpaper()
+                self.fetch_and_set_wallpaper()
+        self._update_countdown()
         self.root.after(1000, self.timer_loop)
 
     def _cycle_favorite(self):
@@ -321,6 +351,7 @@ class WallpaperApp:
 
     def apply_settings(self, show_msg=True):
         old_interval = self.cfg.get("interval_minutes", 30)
+        old_favorite_behavior = self.cfg.get("favorite_behavior")
         self.cfg.update(self.settings_view.collect())
         self.cfg.update(self.favorite_view.collect())
         config.save_config(self.cfg)
@@ -331,8 +362,10 @@ class WallpaperApp:
         current = self.current_applied_wallpaper
         if current and os.path.isfile(current):
             wallpaper_service.set_wallpaper_windows(current)
-        if old_interval != self.cfg["interval_minutes"]:
+        if old_interval != self.cfg["interval_minutes"] or old_favorite_behavior != self.cfg.get("favorite_behavior"):
             self.reset_refresh_timer()
+        else:
+            self._update_countdown()
         if show_msg:
             messagebox.showinfo("设置已保存", "设置已保存并生效。", parent=self.root)
 

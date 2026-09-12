@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 BUILTIN_SOURCES = [
     {
         "id": "all",
-        "name": "东方随机图（默认）",
+        "name": "东方随机图（全部）",
         "url": "https://img.paulzzh.com/touhou/random?size={size}&site=all",
         "site": "all",
         "size": "pc",

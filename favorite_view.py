@@ -44,16 +44,45 @@ class FavoriteView:
         btns.pack(fill=tk.X, pady=(10, 4))
         ctk.CTkButton(btns, text="应用", height=36, command=self.apply_selected).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
         ctk.CTkButton(btns, text="删除", height=36, fg_color="#8c4b4b", hover_color="#6d3838", command=self.delete_selected).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
-        self.var_fav_carousel = tk.BooleanVar(value=self.cfg.get("favorite_carousel", False))
-        ctk.CTkCheckBox(body, text="收藏模式也自动轮播", variable=self.var_fav_carousel, command=self._mark_dirty).pack(anchor=tk.W, pady=(10, 5))
+        # 收藏后的自动刷新行为：
+        # pause   = 暂停自动刷新，保持当前收藏壁纸
+        # carousel = 在收藏夹中按间隔轮播
+        # online  = 继续在线轮播（兼容旧版本行为）
+        ctk.CTkLabel(body, text="收藏后自动刷新行为", font=("Microsoft YaHei", 12, "bold")).pack(anchor=tk.W, pady=(13, 5))
+        self.favorite_behavior_var = tk.StringVar(value=self._normalized_behavior())
+        behaviors = [
+            ("pause", "⏸ 暂停自动刷新（保持当前收藏壁纸）"),
+            ("carousel", "⭐ 星标壁纸轮播（按设置间隔切换收藏）"),
+            ("online", "🌐 继续在线轮播（收藏仅保存图片）"),
+        ]
+        self._favorite_behavior_map = dict(behaviors)
+        self._favorite_behavior_reverse = {label: key for key, label in behaviors}
+        radio_box = ctk.CTkFrame(body, fg_color="transparent")
+        radio_box.pack(fill=tk.X, pady=(0, 4))
+        for key, label in behaviors:
+            ctk.CTkRadioButton(
+                radio_box, text=label, value=key, variable=self.favorite_behavior_var,
+                command=self._mark_dirty
+            ).pack(anchor=tk.W, pady=3)
 
         card, body = self._card(self.parent, "预览", "当前选中收藏的预览图。")
         card.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=8)
         self.preview_label = ctk.CTkLabel(body, text="暂无预览", corner_radius=12, font=("Microsoft YaHei", 12), fg_color=("gray92", "gray18"))
         self.preview_label.pack(fill=tk.BOTH, expand=True)
 
+    def _normalized_behavior(self):
+        behavior = self.cfg.get("favorite_behavior")
+        if behavior in {"pause", "carousel", "online"}:
+            return behavior
+        # 兼容旧版的 favorite_carousel 配置
+        return "carousel" if self.cfg.get("favorite_carousel", False) else "online"
+
     def _mark_dirty(self):
-        self.app.cfg["favorite_carousel"] = self.var_fav_carousel.get()
+        behavior = self.favorite_behavior_var.get()
+        self.app.cfg["favorite_behavior"] = behavior
+        # 同步旧字段，保证旧代码/旧配置仍可识别
+        self.app.cfg["favorite_carousel"] = behavior == "carousel"
+        self.app.on_favorite_behavior_changed(behavior)
 
     def refresh(self):
         files = wallpaper_service.list_favorites()
@@ -115,4 +144,8 @@ class FavoriteView:
             messagebox.showerror("删除失败", str(exc), parent=self.parent)
 
     def collect(self):
-        return {"favorite_carousel": self.var_fav_carousel.get()}
+        behavior = self.favorite_behavior_var.get()
+        return {
+            "favorite_behavior": behavior,
+            "favorite_carousel": behavior == "carousel",
+        }

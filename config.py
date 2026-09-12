@@ -17,6 +17,7 @@ DEFAULT_CONFIG = {
     "size": "pc",
     "original_wallpaper": "",
     "favorite_carousel": False,
+    "favorite_behavior": "pause",
     "hotkey_favorite": "",
     "hotkey_switch": "",
     "wallpaper_style": "fill",
