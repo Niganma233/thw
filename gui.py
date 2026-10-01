@@ -2,10 +2,6 @@ import os
 import queue
 import tempfile
 import time
-import tkinter as tk
-from tkinter import messagebox
-
-import customtkinter as ctk
 
 import config
 import wallpaper_service
@@ -22,13 +18,18 @@ from core.scheduler import (
 )
 from services.wallpaper_worker import EVENT_ERROR, EVENT_SUCCESS, WallpaperDownloadWorker
 from source_manager import SourceManager
-from ui import theme
-from ui.dialogs import ask_wallpaper_name, show_data_dir_unwritable
-from ui.favorite_view import FavoriteView
+from ui.dialogs import (
+    ask_wallpaper_name,
+    show_data_dir_unwritable,
+    show_error,
+    show_info,
+    show_warning,
+)
+from ui.favorite_view import FavoriteView, FavoriteViewHooks
 from ui.hotkeys import HotkeyManager
+from ui.main_window import MainWindow
 from ui.settings_view import SettingsView
 from ui.source_manager_view import SourceManagerView
-from ui.status_bar import StatusPresenter
 from ui.tray import TrayController
 from ui.widgets import open_folder
 
@@ -90,42 +91,36 @@ class WallpaperApp:
             config.save_config(self.cfg)
 
     def init_ui(self):
-        container = ctk.CTkFrame(self.root, fg_color="transparent")
-        container.pack(fill=tk.BOTH, expand=True, padx=20, pady=18)
+        self.window = MainWindow(
+            self.root,
+            on_next_wallpaper=self.fetch_and_set_wallpaper,
+            on_favorite_current=self.favorite_current_wallpaper,
+            on_open_favorites=lambda: open_folder(config.FAVORITES_DIR),
+            on_hide_to_tray=self.hide_to_tray,
+            on_save_settings=self.apply_settings,
+            on_quit_and_restore=self.quit_and_restore,
+        )
+        self.status = self.window.status
+        self.next_btn = self.window.next_btn
+        self.countdown_var = self.window.countdown_var
 
-        header = ctk.CTkFrame(container, corner_radius=16)
-        header.pack(fill=tk.X, pady=(0, 14))
-        brand = ctk.CTkFrame(header, fg_color="transparent")
-        brand.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=20, pady=16)
-        ctk.CTkLabel(brand, text="🌸  Touhou Wallpaper", font=theme.FONT_BRAND, anchor="w").pack(anchor=tk.W)
-        ctk.CTkLabel(brand, text="自动更换东方 Project 壁纸 · 图源可自定义", font=theme.FONT_BODY, text_color=theme.COLOR_MUTED_STRONG, anchor="w").pack(anchor=tk.W, pady=(2, 0))
-
-        self.status = StatusPresenter(header, initial_text="在线轮播就绪")
-
-        actions = ctk.CTkFrame(container, fg_color="transparent")
-        actions.pack(fill=tk.X, pady=(0, 14))
-        self.next_btn = ctk.CTkButton(actions, text="🎲  换一张", height=42, font=theme.FONT_COMBO, command=self.fetch_and_set_wallpaper)
-        self.next_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        ctk.CTkButton(actions, text="⭐  收藏当前", height=42, command=self.favorite_current_wallpaper).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-        ctk.CTkButton(actions, text="📂  打开收藏夹", height=42, command=lambda: open_folder(config.FAVORITES_DIR)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-        ctk.CTkButton(actions, text="🗕  托盘", height=42, command=self.hide_to_tray).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
-
-        self.tabview = ctk.CTkTabview(container)
-        self.tabview.pack(fill=tk.BOTH, expand=True)
-        general_tab = self.tabview.add("⚙  常规")
-        source_tab = self.tabview.add("🌐  图源管理")
-        favorite_tab = self.tabview.add("⭐  收藏")
-
-        self.settings_view = SettingsView(general_tab, self.cfg, app=self)
-        self.source_view = SourceManagerView(source_tab, self.cfg, manager=self.source_manager, on_changed=self._source_changed, on_status=self.set_status)
-        self.favorite_view = FavoriteView(favorite_tab, self)
-
-        footer = ctk.CTkFrame(container, fg_color="transparent")
-        footer.pack(fill=tk.X, pady=(12, 0))
-        self.countdown_var = tk.StringVar(value="下次刷新：—")
-        ctk.CTkLabel(footer, textvariable=self.countdown_var, font=("Microsoft YaHei", 11), text_color=("gray45", "gray60")).pack(side=tk.LEFT)
-        ctk.CTkButton(footer, text="保存设置", width=120, height=34, command=self.apply_settings).pack(side=tk.RIGHT, padx=(8, 0))
-        ctk.CTkButton(footer, text="退出并还原壁纸", width=140, height=34, fg_color="#b44", hover_color="#933", command=self.quit_and_restore).pack(side=tk.RIGHT)
+        self.settings_view = SettingsView(self.window.general_tab, self.cfg, app=self)
+        self.source_view = SourceManagerView(
+            self.window.source_tab, self.cfg, manager=self.source_manager,
+            on_changed=self._source_changed, on_status=self.set_status,
+        )
+        self.favorite_view = FavoriteView(
+            self.window.favorite_tab,
+            FavoriteViewHooks(
+                set_status=self.set_status,
+                on_behavior_changed=self.on_favorite_behavior_changed,
+                on_favorite_current=self.favorite_current_wallpaper,
+                on_apply=self.apply_favorite_wallpaper,
+                on_is_current=self.is_current_wallpaper,
+                on_refresh_requested=self.fetch_and_set_wallpaper,
+            ),
+            initial_behavior=resolve_favorite_behavior(self.cfg),
+        )
 
     # ---------- 模式 ----------
     @property
@@ -159,6 +154,28 @@ class WallpaperApp:
         if save:
             config.save_config(self.cfg)
 
+    # ---------- 收藏 ----------
+    def apply_favorite_wallpaper(self, path):
+        """把某张收藏设为桌面壁纸并进入收藏模式；失败返回 False。
+
+        这是 FavoriteViewHooks.on_apply 的实现：视图只负责选哪张、以及要不要弹
+        "应用失败"，改状态这件事留在 App 里。
+        """
+        if not wallpaper_service.set_wallpaper_windows(path):
+            return False
+        self.current_applied_wallpaper = path
+        self.mode = MODE_FAVORITE
+        self.reset_refresh_timer()
+        self.set_status(f"⭐ 使用收藏：{os.path.basename(path)}", "favorite")
+        return True
+
+    def is_current_wallpaper(self, path):
+        """这张收藏是不是当前正在使用的壁纸。"""
+        current = self.current_applied_wallpaper
+        if not current:
+            return False
+        return os.path.abspath(current) == os.path.abspath(path)
+
     def set_status(self, text, kind="ready"):
         """更新状态栏。
 
@@ -183,10 +200,10 @@ class WallpaperApp:
     def favorite_current_wallpaper(self):
         path = self.current_applied_wallpaper
         if not path or not os.path.isfile(path):
-            messagebox.showwarning("提示", "当前没有可收藏的壁纸。", parent=self.root)
+            show_warning(self.root, "提示", "当前没有可收藏的壁纸。")
             return
         if os.path.dirname(os.path.abspath(path)) == os.path.abspath(config.FAVORITES_DIR):
-            messagebox.showinfo("提示", "这张壁纸已经在收藏夹中了。", parent=self.root)
+            show_info(self.root, "提示", "这张壁纸已经在收藏夹中了。")
             return
         name = ask_wallpaper_name(f"fav_{time.strftime('%Y%m%d_%H%M%S')}")
         if name is None:
@@ -195,14 +212,13 @@ class WallpaperApp:
             filename, fav_path = wallpaper_service.save_favorite(path, name)
             wallpaper_service.set_wallpaper_windows(fav_path)
             self.current_applied_wallpaper = fav_path
-            self.mode = "favorite"
+            self.mode = MODE_FAVORITE
             self.reset_refresh_timer()
             self.favorite_view.refresh()
-            self.favorite_view.fav_combo_var.set(filename)
-            self.favorite_view.update_preview()
+            self.favorite_view.select(filename)
             self.set_status(f"⭐ 已收藏：{filename}", "favorite")
         except Exception as exc:
-            messagebox.showerror("收藏失败", str(exc), parent=self.root)
+            show_error(self.root, "收藏失败", str(exc))
 
     # ---------- 下载 ----------
     def _selected_source(self):
@@ -283,14 +299,9 @@ class WallpaperApp:
                 self._download_result(False, event[1])
 
     def _cycle_favorite(self):
-        files = wallpaper_service.list_favorites()
-        if not files:
+        # 推进到下一张收藏这件事由视图自己做（它才知道下拉框怎么实现）
+        if not self.favorite_view.select_next():
             self.reset_refresh_timer()
-            return
-        current = self.favorite_view.fav_combo_var.get()
-        idx = files.index(current) if current in files else -1
-        self.favorite_view.fav_combo_var.set(files[(idx + 1) % len(files)])
-        self.favorite_view.apply_selected()
 
     # ---------- 热键 / 托盘 ----------
     def register_hotkeys(self):
@@ -339,14 +350,14 @@ class WallpaperApp:
         except Exception as exc:
             self.set_status(f"保存设置失败：{exc}", "error")
             if show_msg:
-                messagebox.showerror("保存设置失败", str(exc), parent=self.root)
+                show_error(self.root, "保存设置失败", str(exc))
             return False
         if old_interval != self.cfg["interval_minutes"] or old_favorite_behavior != self.cfg.get("favorite_behavior"):
             self.reset_refresh_timer()
         else:
             self._update_countdown()
         if show_msg:
-            messagebox.showinfo("设置已保存", "设置已保存并生效。", parent=self.root)
+            show_info(self.root, "设置已保存", "设置已保存并生效。")
         return True
 
     def quit_and_restore(self):
@@ -364,4 +375,4 @@ class WallpaperApp:
             # 退出途中出错时把锁恢复，否则"退出/托盘"按钮会永久失效
             self._closing = False
             self.set_status(f"退出失败：{exc}", "error")
-            messagebox.showerror("退出失败", str(exc), parent=self.root)
+            show_error(self.root, "退出失败", str(exc))

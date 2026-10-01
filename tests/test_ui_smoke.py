@@ -17,7 +17,6 @@ from tests.helpers import (
     IsolatedDataDir,
     collect_widgets,
     default_cfg,
-    make_bare_app,
     tk_root,
 )
 
@@ -156,16 +155,35 @@ class FixedHeightComboBoxSmokeTest(unittest.TestCase):
 
 
 class FavoriteViewSmokeTest(unittest.TestCase):
-    def _view(self, root):
+    """FavoriteView 现在只依赖显式钩子，不再持有 WallpaperApp。"""
+
+    def _hooks(self, applied=None, is_current=False):
+        from ui.favorite_view import FavoriteViewHooks
+
+        self.statuses = []
+        self.behavior_changes = []
+        self.refresh_requests = []
+        self.applied_paths = []
+        applied_result = True if applied is None else applied
+
+        def on_apply(path):
+            self.applied_paths.append(path)
+            return applied_result
+
+        return FavoriteViewHooks(
+            set_status=lambda text, kind="ready": self.statuses.append((text, kind)),
+            on_behavior_changed=self.behavior_changes.append,
+            on_favorite_current=lambda: None,
+            on_apply=on_apply,
+            on_is_current=lambda path: is_current,
+            on_refresh_requested=lambda: self.refresh_requests.append(True),
+        )
+
+    def _view(self, root, initial_behavior="pause", **hook_kwargs):
         from ui.favorite_view import FavoriteView
-        app = make_bare_app()
-        app.favorite_current_wallpaper = lambda: None
-        app.on_favorite_behavior_changed = lambda behavior: None
-        app.reset_refresh_timer = lambda: None
-        app.fetch_and_set_wallpaper = lambda: None
         tab = _ctk().CTkFrame(root)
         # FavoriteView.__init__ 只建控件；填充列表是 gui.WallpaperApp 之后调用的
-        view = FavoriteView(tab, app)
+        view = FavoriteView(tab, self._hooks(**hook_kwargs), initial_behavior=initial_behavior)
         view.refresh()
         return view
 
@@ -173,6 +191,7 @@ class FavoriteViewSmokeTest(unittest.TestCase):
         with IsolatedDataDir(), tk_root() as root:
             view = self._view(root)
             self.assertEqual(view.fav_combo_var.get(), "暂无收藏壁纸")
+            self.assertEqual(view.current_selection(), "")
             self.assertEqual(view.collect()["favorite_behavior"], "pause")
 
     def test_refresh_lists_favorites_and_previews_first(self):
@@ -181,6 +200,7 @@ class FavoriteViewSmokeTest(unittest.TestCase):
             with tk_root() as root:
                 view = self._view(root)
                 self.assertEqual(view.fav_combo_var.get(), "saved.png")
+                self.assertEqual(view.current_selection(), "saved.png")
                 self.assertIsNotNone(view._preview_img, "预览图应当被加载")
 
     def test_preview_follows_selection(self):
@@ -189,8 +209,8 @@ class FavoriteViewSmokeTest(unittest.TestCase):
             make_png(Path(base) / "Favorites" / "b.png", color="blue")
             with tk_root() as root:
                 view = self._view(root)
-                view.fav_combo_var.set("b.png")
-                view.update_preview()
+                view.select("b.png")
+                self.assertEqual(view.current_selection(), "b.png")
                 self.assertIsNotNone(view._preview_img)
 
     def test_unreadable_preview_degrades_gracefully(self):
@@ -210,13 +230,84 @@ class FavoriteViewSmokeTest(unittest.TestCase):
         self.assertTrue(collected["favorite_carousel"])
 
     def test_legacy_config_maps_to_carousel(self):
+        from core.scheduler import resolve_favorite_behavior
+        cfg = default_cfg(favorite_behavior=None, favorite_carousel=True)
         with IsolatedDataDir(), tk_root() as root:
-            from ui.favorite_view import FavoriteView
-            app = make_bare_app(default_cfg(favorite_behavior=None, favorite_carousel=True))
-            app.favorite_current_wallpaper = lambda: None
-            tab = _ctk().CTkFrame(root)
-            view = FavoriteView(tab, app)
+            view = self._view(root, initial_behavior=resolve_favorite_behavior(cfg))
             self.assertEqual(view.favorite_behavior_var.get(), "carousel")
+
+    def test_apply_asks_the_hook_and_reports_success(self):
+        with IsolatedDataDir() as base:
+            make_png(Path(base) / "Favorites" / "a.png")
+            with tk_root() as root:
+                view = self._view(root)
+                self.assertTrue(view.apply_selected())
+        self.assertEqual(len(self.applied_paths), 1)
+        self.assertTrue(self.applied_paths[0].endswith("a.png"))
+
+    def test_apply_failure_shows_an_error(self):
+        with IsolatedDataDir() as base:
+            make_png(Path(base) / "Favorites" / "a.png")
+            with tk_root() as root:
+                view = self._view(root, applied=False)
+                with mock.patch("tkinter.messagebox.showerror") as error:
+                    self.assertFalse(view.apply_selected())
+                self.assertTrue(error.called)
+
+    def test_apply_with_nothing_selected_warns(self):
+        with IsolatedDataDir(), tk_root() as root:
+            view = self._view(root)
+            with mock.patch("tkinter.messagebox.showwarning") as warning:
+                self.assertFalse(view.apply_selected())
+            self.assertTrue(warning.called)
+            self.assertEqual(self.applied_paths, [])
+
+    def test_select_next_wraps_around(self):
+        with IsolatedDataDir() as base:
+            for name in ("a.png", "b.png"):
+                make_png(Path(base) / "Favorites" / name)
+            with tk_root() as root:
+                view = self._view(root)
+                self.assertEqual(view.current_selection(), "a.png")
+                self.assertTrue(view.select_next())
+                self.assertEqual(view.current_selection(), "b.png")
+                self.assertTrue(view.select_next())
+                self.assertEqual(view.current_selection(), "a.png")
+        self.assertEqual(len(self.applied_paths), 2, "每次轮播都应请求应用")
+
+    def test_select_next_without_favorites_returns_false(self):
+        with IsolatedDataDir(), tk_root() as root:
+            view = self._view(root)
+            self.assertFalse(view.select_next())
+        self.assertEqual(self.applied_paths, [])
+
+    def test_behavior_change_is_reported_but_cfg_is_left_alone(self):
+        # 视图不再自己写 cfg：写配置由 App 的 on_favorite_behavior_changed 负责
+        with IsolatedDataDir(), tk_root() as root:
+            view = self._view(root)
+            view.favorite_behavior_var.set("carousel")
+            view._mark_dirty()
+        self.assertEqual(self.behavior_changes, ["carousel"])
+
+    def test_delete_of_current_wallpaper_requests_a_refresh(self):
+        with IsolatedDataDir() as base:
+            make_png(Path(base) / "Favorites" / "a.png")
+            with tk_root() as root:
+                view = self._view(root, is_current=True)
+                with mock.patch("tkinter.messagebox.askyesno", return_value=True):
+                    self.assertTrue(view.delete_selected())
+        self.assertEqual(self.refresh_requests, [True])
+        self.assertEqual(self.statuses, [])
+
+    def test_delete_of_other_wallpaper_reports_status(self):
+        with IsolatedDataDir() as base:
+            make_png(Path(base) / "Favorites" / "a.png")
+            with tk_root() as root:
+                view = self._view(root, is_current=False)
+                with mock.patch("tkinter.messagebox.askyesno", return_value=True):
+                    self.assertTrue(view.delete_selected())
+        self.assertEqual(self.refresh_requests, [])
+        self.assertEqual(self.statuses[-1], ("已删除收藏", "ready"))
 
 
 class SourceManagerViewSmokeTest(unittest.TestCase):

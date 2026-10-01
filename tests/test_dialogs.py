@@ -91,5 +91,25 @@ class ShowDataDirUnwritableTest(unittest.TestCase):
         self.assertEqual(warning.call_args.kwargs["parent"], "parent-widget")
 
 
+class SimpleDialogWrappersTest(unittest.TestCase):
+    """gui.WallpaperApp 通过这些包装弹窗，因此它自己完全不 import tkinter
+    （见 tests/test_layering.py）。这里确认包装没有改变参数顺序或丢掉 parent。
+    """
+
+    def _assert_forwards(self, function, patched_name):
+        with mock.patch(patched_name) as box:
+            function("parent-widget", "标题", "内容")
+        box.assert_called_once_with("标题", "内容", parent="parent-widget")
+
+    def test_show_info(self):
+        self._assert_forwards(dialogs.show_info, "tkinter.messagebox.showinfo")
+
+    def test_show_warning(self):
+        self._assert_forwards(dialogs.show_warning, "tkinter.messagebox.showwarning")
+
+    def test_show_error(self):
+        self._assert_forwards(dialogs.show_error, "tkinter.messagebox.showerror")
+
+
 if __name__ == "__main__":
     unittest.main()
