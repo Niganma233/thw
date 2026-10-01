@@ -1,4 +1,11 @@
+# 运行期依赖（仅 Windows）
 Pillow>=12.3.0
 pystray>=0.19.5
 keyboard>=0.13.5
-customtkinter>=5.2.2
+
+# 精确锁定：fixed_combobox.py 依赖 CTkComboBox 的一批私有属性
+# （_canvas / _entry / _dropdown_menu / _values / _state /
+# _apply_widget_scaling / _dropdown_callback 等），customtkinter 的次版本升级
+# 就可能让收藏下拉框直接失效。升级前请先跑 `python -m unittest discover -s tests -t .`
+# —— tests/test_ui_smoke.py 的 FixedHeightComboBoxSmokeTest 会真的展开一次下拉列表。
+customtkinter==6.0.0
