@@ -45,6 +45,20 @@ class LoadConfigTest(unittest.TestCase):
         self.assertEqual(cfg["sources"], [])
         self.assertEqual(cfg["custom_sources"], [])
 
+    def test_defaults_are_not_mutated_by_a_loaded_config(self):
+        # Phase 1 修复：以前是 DEFAULT_CONFIG.copy()（浅拷贝），cfg["sources"] 与
+        # DEFAULT_CONFIG["sources"] 是同一个列表对象，追加图源会污染默认值，
+        # 之后每次启动都会带着上一次运行残留的图源。
+        with IsolatedDataDir():
+            cfg = config.load_config()
+            cfg["sources"].append({"id": "x", "name": "污染", "url": "https://e.com/r"})
+            cfg["custom_sources"].append({"name": "污染"})
+            fresh = config.load_config()
+        self.assertEqual(config.DEFAULT_CONFIG["sources"], [])
+        self.assertEqual(config.DEFAULT_CONFIG["custom_sources"], [])
+        self.assertEqual(fresh["sources"], [])
+        self.assertEqual(fresh["custom_sources"], [])
+
 
 class SaveConfigTest(unittest.TestCase):
     def test_roundtrip(self):

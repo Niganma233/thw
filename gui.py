@@ -23,6 +23,7 @@ from favorite_view import FavoriteView
 from settings_view import SettingsView
 from source_manager_view import SourceManagerView
 from source_manager import SourceManager
+from ui_widgets import open_folder
 
 ctk.set_appearance_mode("system")
 ctk.set_default_color_theme("blue")
@@ -74,15 +75,6 @@ class WallpaperApp:
             self.cfg["original_wallpaper"] = cur_wp
             config.save_config(self.cfg)
 
-    def _make_card(self, parent, title, subtitle=None):
-        card = ctk.CTkFrame(parent, corner_radius=14, border_width=1)
-        ctk.CTkLabel(card, text=title, font=("Microsoft YaHei", 14, "bold"), anchor="w").pack(anchor=tk.W, padx=16, pady=(14, 2))
-        if subtitle:
-            ctk.CTkLabel(card, text=subtitle, font=("Microsoft YaHei", 10), text_color=("gray45", "gray60"), justify="left").pack(anchor=tk.W, padx=16, pady=(0, 8))
-        body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(2, 14))
-        return card, body
-
     def init_ui(self):
         container = ctk.CTkFrame(self.root, fg_color="transparent")
         container.pack(fill=tk.BOTH, expand=True, padx=20, pady=18)
@@ -106,7 +98,7 @@ class WallpaperApp:
         self.next_btn = ctk.CTkButton(actions, text="🎲  换一张", height=42, font=("Microsoft YaHei", 13, "bold"), command=self.fetch_and_set_wallpaper)
         self.next_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
         ctk.CTkButton(actions, text="⭐  收藏当前", height=42, command=self.favorite_current_wallpaper).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-        ctk.CTkButton(actions, text="📂  打开收藏夹", height=42, command=lambda: os.startfile(config.FAVORITES_DIR)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        ctk.CTkButton(actions, text="📂  打开收藏夹", height=42, command=lambda: open_folder(config.FAVORITES_DIR)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
         ctk.CTkButton(actions, text="🗕  托盘", height=42, command=self.hide_to_tray).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
 
         self.tabview = ctk.CTkTabview(container)
@@ -116,7 +108,7 @@ class WallpaperApp:
         favorite_tab = self.tabview.add("⭐  收藏")
 
         self.settings_view = SettingsView(general_tab, self.cfg, app=self)
-        self.source_view = SourceManagerView(source_tab, self.cfg, on_changed=self._source_changed, on_status=self.set_status)
+        self.source_view = SourceManagerView(source_tab, self.cfg, manager=self.source_manager, on_changed=self._source_changed, on_status=self.set_status)
         self.favorite_view = FavoriteView(favorite_tab, self)
 
         footer = ctk.CTkFrame(container, fg_color="transparent")
@@ -138,7 +130,8 @@ class WallpaperApp:
         self._update_countdown()
 
     def _source_changed(self, save=False):
-        self.source_manager = SourceManager(self.cfg)
+        # 图源是由 SourceManagerView 通过共享的 SourceManager 实例就地改的，
+        # self.source_manager 始终看得到最新状态，不必重建（重建只会白跑一遍迁移）。
         if save:
             config.save_config(self.cfg)
 
@@ -172,11 +165,8 @@ class WallpaperApp:
                     parent=self.root,
                 )
 
-    # ---------- 收藏兼容入口 ----------
+    # ---------- 收藏 ----------
     def favorite_current_wallpaper(self):
-        self._favorite_current_wallpaper()
-
-    def _favorite_current_wallpaper(self):
         path = self.current_applied_wallpaper
         if not path or not os.path.isfile(path):
             messagebox.showwarning("提示", "当前没有可收藏的壁纸。", parent=self.root)
@@ -191,9 +181,8 @@ class WallpaperApp:
         if name is None:
             return
         name = name.strip() or default_name
-        safe_name = "".join("_" if c in '<>:"/\\|?*' else c for c in name).strip().rstrip(".") or default_name
         try:
-            filename, fav_path = wallpaper_service.save_favorite(path, safe_name)
+            filename, fav_path = wallpaper_service.save_favorite(path, name)
             wallpaper_service.set_wallpaper_windows(fav_path)
             self.current_applied_wallpaper = fav_path
             self.mode = "favorite"

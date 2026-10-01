@@ -2,8 +2,8 @@ import tkinter as tk
 from tkinter import messagebox
 import customtkinter as ctk
 
-import config
 import wallpaper_service
+from ui_widgets import make_card
 
 
 class SettingsView:
@@ -12,25 +12,17 @@ class SettingsView:
         self.parent = parent
         self.app = app
         self.interval_map = {"不自动更换": 0, "每 5 分钟": 5, "每 15 分钟": 15, "每 30 分钟": 30, "每 1 小时": 60, "每 2 小时": 120, "每 4 小时": 240}
+        # 键必须与 wallpaper_service.WALLPAPER_STYLES 完全一致；
+        # tests/test_ui_smoke.py 的 test_style_keys_match_service 会守住这一点。
         self.style_map = {"fill": "填充：铺满并裁剪", "fit": "适应：完整显示", "center": "居中", "stretch": "拉伸"}
-        self.size_map = {"pc": "电脑壁纸", "mobile": "手机壁纸"}
         self._build()
-
-    def _card(self, parent, title, subtitle=None):
-        card = ctk.CTkFrame(parent, corner_radius=14, border_width=1)
-        ctk.CTkLabel(card, text=title, font=("Microsoft YaHei", 14, "bold"), anchor="w").pack(anchor=tk.W, padx=16, pady=(14, 2))
-        if subtitle:
-            ctk.CTkLabel(card, text=subtitle, font=("Microsoft YaHei", 10), text_color=("gray45", "gray60"), justify="left").pack(anchor=tk.W, padx=16, pady=(0, 8))
-        body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(2, 14))
-        return card, body
 
     def _build(self):
         self.parent.grid_columnconfigure(0, weight=1)
         self.parent.grid_columnconfigure(1, weight=1)
         self.parent.grid_rowconfigure(0, weight=1)
         self.parent.grid_rowconfigure(2, weight=0)
-        card, body = self._card(self.parent, "自动轮播", "控制启动行为与自动换图频率。")
+        card, body = make_card(self.parent, "自动轮播", "控制启动行为与自动换图频率。")
         card.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=8)
         self.var_startup = tk.BooleanVar(value=self.cfg.get("refresh_on_startup", True))
         self.var_autostart = tk.BooleanVar(value=self.cfg.get("auto_start", True))
@@ -43,7 +35,7 @@ class SettingsView:
         self.interval_var = tk.StringVar(value=cur)
         ctk.CTkComboBox(row, variable=self.interval_var, values=list(self.interval_map), state="readonly", width=160).pack(side=tk.RIGHT)
 
-        card, body = self._card(self.parent, "壁纸显示", "Windows 桌面壁纸缩放方式。")
+        card, body = make_card(self.parent, "壁纸显示", "Windows 桌面壁纸缩放方式。")
         card.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=8)
         row = ctk.CTkFrame(body, fg_color="transparent")
         row.pack(fill=tk.X, pady=6)
@@ -52,7 +44,7 @@ class SettingsView:
         ctk.CTkComboBox(row, variable=self.style_var, values=list(self.style_map.values()), state="readonly", width=180).pack(side=tk.RIGHT)
         ctk.CTkLabel(body, text="推荐“填充”。切换样式后会立即重新应用当前壁纸。", text_color=("gray45", "gray60"), justify="left").pack(anchor=tk.W, pady=(12, 0))
 
-        card, body = self._card(self.parent, "缓存管理", "程序会缓存最近下载的图片；清理时会保护当前正在使用的壁纸。")
+        card, body = make_card(self.parent, "缓存管理", "程序会缓存最近下载的图片；清理时会保护当前正在使用的壁纸。")
         card.grid(row=2, column=0, sticky="nsew", padx=(0, 8), pady=(8, 8))
         row = ctk.CTkFrame(body, fg_color="transparent")
         row.pack(fill=tk.X, pady=4)
@@ -62,7 +54,7 @@ class SettingsView:
         ctk.CTkButton(body, text="🧹 清理缓存图片", height=36, command=self.clear_cache).pack(fill=tk.X, pady=(8, 2))
         self.refresh_cache_info()
 
-        card, body = self._card(self.parent, "全局快捷键", "留空即可关闭；保存后重新注册。")
+        card, body = make_card(self.parent, "全局快捷键", "留空即可关闭；保存后重新注册。")
         card.grid(row=2, column=1, sticky="nsew", padx=(8, 0), pady=(8, 8))
         row1 = ctk.CTkFrame(body, fg_color="transparent")
         row1.pack(fill=tk.X, pady=4)

@@ -96,13 +96,17 @@ class SourceManager:
 
         old_selected = self.cfg.get("source_id", "all")
         if isinstance(old_selected, str) and old_selected.startswith("custom:"):
+            new_id = None
             try:
                 old_index = int(old_selected.split(":", 1)[1])
                 new_id = legacy_index_to_id.get(old_index)
-                if new_id:
-                    self.cfg["source_id"] = new_id
             except ValueError:
-                self.cfg["source_id"] = "all"
+                new_id = None
+            # 映射不到就必须回退：否则 "custom:N" 会悬空留在配置里，界面显示的
+            # 当前图源并不存在，_selected_source() 只能悄悄退回 "all"。
+            # 旧索引对不上是常见情况——比如该 URL 已在 sources 里（被去重跳过）、
+            # 或换了台机器只同步了 config.json。
+            self.cfg["source_id"] = new_id or "all"
 
     @staticmethod
     def _normalize_custom(item):

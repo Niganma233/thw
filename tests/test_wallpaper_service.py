@@ -310,16 +310,16 @@ class ClearCacheTest(unittest.TestCase):
 
 class SafeNameTest(unittest.TestCase):
     def test_illegal_characters_are_replaced(self):
-        self.assertEqual(wallpaper_service._safe_name('a<b>c:d"e/f\\g|h?i*j'), "a_b_c_d_e_f_g_h_i_j")
+        self.assertEqual(wallpaper_service.safe_name('a<b>c:d"e/f\\g|h?i*j'), "a_b_c_d_e_f_g_h_i_j")
 
     def test_trailing_dots_are_stripped(self):
-        self.assertEqual(wallpaper_service._safe_name("name..."), "name")
+        self.assertEqual(wallpaper_service.safe_name("name..."), "name")
 
     def test_surrounding_whitespace_is_stripped(self):
-        self.assertEqual(wallpaper_service._safe_name("  name  "), "name")
+        self.assertEqual(wallpaper_service.safe_name("  name  "), "name")
 
     def test_blank_falls_back_to_timestamped_name(self):
-        result = wallpaper_service._safe_name("...")
+        result = wallpaper_service.safe_name("...")
         self.assertTrue(result.startswith("fav_"))
 
 

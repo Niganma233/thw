@@ -11,7 +11,7 @@ import time
 import unittest
 import unittest.mock as mock
 
-from tests.helpers import FakeVar, IsolatedDataDir, default_cfg, make_bare_app
+from tests.helpers import IsolatedDataDir, default_cfg, make_bare_app
 import config
 
 NOW = 1_700_000_000.0

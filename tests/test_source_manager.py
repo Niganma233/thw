@@ -74,16 +74,38 @@ class MigrateLegacyTest(unittest.TestCase):
         second_id = next(s["id"] for s in cfg["sources"] if s["name"] == "第二个")
         self.assertEqual(cfg["source_id"], second_id)
 
-    @unittest.expectedFailure
     def test_out_of_range_custom_selection_falls_back_to_all(self):
-        # 已发现的真实缺陷：migrate_legacy 只在 int() 抛异常时回退到 "all"。
-        # 当 custom:N 的 N 能解析成整数但对应的旧图源不存在时（图源被删掉、
-        # 或换了台机器），new_id 为 None，于是 cfg["source_id"] 原样保留成
-        # 悬空的 "custom:7"，UI 会显示"图源不存在"。Phase 1 修复后请去掉这行
-        # expectedFailure 装饰器。
+        # Phase 1 修复：以前只在 int() 抛异常时回退，N 能解析但旧图源不存在时
+        # 会把悬空的 "custom:7" 原样留在配置里。
         cfg = default_cfg(custom_sources=[], source_id="custom:7")
         SourceManager(cfg)
         self.assertEqual(cfg["source_id"], "all")
+
+    def test_selection_pointing_at_deduped_legacy_entry_falls_back(self):
+        # 旧索引 1 指向的 URL 已经在 sources 里，迁移时被去重跳过，于是映射表里
+        # 没有 1；选择值必须回退而不是悬空。
+        cfg = default_cfg(
+            sources=[{"name": "已有", "url": "https://dup.example/r"}],
+            custom_sources=[
+                {"name": "第一个", "url": "https://first.example/r"},
+                {"name": "重复", "url": "https://dup.example/r"},
+            ],
+            source_id="custom:1",
+        )
+        SourceManager(cfg)
+        self.assertEqual(cfg["source_id"], "all")
+
+    def test_valid_legacy_selection_still_migrates(self):
+        cfg = default_cfg(
+            custom_sources=[
+                {"name": "第一个", "url": "https://a.example/r"},
+                {"name": "第二个", "url": "https://b.example/r"},
+            ],
+            source_id="custom:0",
+        )
+        SourceManager(cfg)
+        first_id = next(s["id"] for s in cfg["sources"] if s["name"] == "第一个")
+        self.assertEqual(cfg["source_id"], first_id)
 
     def test_non_numeric_custom_selection_falls_back_to_all(self):
         cfg = default_cfg(custom_sources=[], source_id="custom:abc")

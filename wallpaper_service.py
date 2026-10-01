@@ -222,7 +222,12 @@ def list_favorites():
     return sorted(files, key=str.casefold)
 
 
-def _safe_name(name):
+def safe_name(name):
+    """把用户输入的收藏名清洗成合法文件名（不含扩展名）。
+
+    公开函数：gui.py 的"收藏当前壁纸"对话框也要用它，之前那里手抄了一份同样的
+    清洗逻辑，两边容易改漏。
+    """
     cleaned = "".join("_" if c in '<>:"/\\|?*' else c for c in name).strip().rstrip(".")
     return cleaned or f"fav_{time.strftime('%Y%m%d_%H%M%S')}"
 
@@ -230,7 +235,7 @@ def _safe_name(name):
 def save_favorite(src_path, name):
     if not src_path or not os.path.isfile(src_path):
         raise FileNotFoundError("当前壁纸文件不存在")
-    base = _safe_name(name)
+    base = safe_name(name)
     ext = os.path.splitext(src_path)[1].lower()
     if ext not in IMAGE_EXTENSIONS:
         ext = ".jpg"

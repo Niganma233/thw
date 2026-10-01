@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import sys
@@ -37,7 +38,10 @@ def ensure_dirs():
 
 
 def load_config():
-    cfg = DEFAULT_CONFIG.copy()
+    # 必须深拷贝：浅拷贝时 cfg["sources"] 与 DEFAULT_CONFIG["sources"] 是同一个
+    # 列表对象，没有配置文件的情况下 SourceManager 往里 append 就会污染默认值，
+    # 之后每次 load_config 都会带着上一次运行残留的图源。
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
     if os.path.isfile(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:

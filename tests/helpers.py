@@ -11,9 +11,11 @@
 """
 from __future__ import annotations
 
+import contextlib
 import copy
 import shutil
 import sys
+import unittest
 import unittest.mock as mock
 import uuid
 from pathlib import Path
@@ -140,3 +142,34 @@ def make_bare_app(cfg=None, mode="online"):
     app.status_log = []
     app.set_status = lambda text, kind="ready": app.status_log.append((text, kind))
     return app
+
+
+@contextlib.contextmanager
+def tk_root():
+    """创建并隐藏一个真实的 CTk 根窗口。
+
+    Tk 初始化失败时（无显示环境）抛 SkipTest，让整套测试优雅跳过而不是失败。
+    """
+    try:
+        import customtkinter as ctk
+        root = ctk.CTk()
+    except Exception as exc:  # pragma: no cover - 只在无显示环境触发
+        raise unittest.SkipTest(f"无法创建 Tk 窗口：{exc}")
+    root.withdraw()
+    try:
+        yield root
+    finally:
+        try:
+            root.destroy()
+        except Exception:
+            pass
+
+
+def collect_widgets(widget, widget_type):
+    """深度收集控件树中指定类型的所有控件。"""
+    found = []
+    for child in widget.winfo_children():
+        if isinstance(child, widget_type):
+            found.append(child)
+        found.extend(collect_widgets(child, widget_type))
+    return found

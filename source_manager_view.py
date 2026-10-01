@@ -7,16 +7,19 @@ import customtkinter as ctk
 
 import config
 import wallpaper_service
-from source_manager import BUILTIN_SOURCES, SourceManager
+from source_manager import SourceManager
+from ui_widgets import make_card
 
 
 class SourceManagerView:
-    def __init__(self, parent, cfg, on_changed=None, on_status=None):
+    def __init__(self, parent, cfg, manager=None, on_changed=None, on_status=None):
         self.parent = parent
         self.cfg = cfg
-        self.on_changed = on_changed or (lambda: None)
+        # 管理器由外部注入：WallpaperApp 与这里共用同一个实例，
+        # 避免在同一份 cfg 上重复跑 migrate_legacy。独立使用时才自己建一个。
+        self.manager = manager if manager is not None else SourceManager(cfg)
+        self.on_changed = on_changed or (lambda save=False: None)
         self.on_status = on_status or (lambda text, kind="ready": None)
-        self.manager = SourceManager(cfg)
         self.selected_id = cfg.get("source_id", "all")
         self._row_widgets = {}
         self._drag_source_id = None
@@ -24,21 +27,12 @@ class SourceManagerView:
         self._build()
         self.refresh()
 
-    def _make_card(self, parent, title, subtitle=None):
-        card = ctk.CTkFrame(parent, corner_radius=14, border_width=1)
-        ctk.CTkLabel(card, text=title, font=("Microsoft YaHei", 14, "bold"), anchor="w").pack(anchor=tk.W, padx=16, pady=(14, 2))
-        if subtitle:
-            ctk.CTkLabel(card, text=subtitle, font=("Microsoft YaHei", 10), text_color=("gray45", "gray60"), justify="left").pack(anchor=tk.W, padx=16, pady=(0, 8))
-        body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(2, 14))
-        return card, body
-
     def _build(self):
         self.parent.grid_columnconfigure(0, weight=0, minsize=360)
         self.parent.grid_columnconfigure(1, weight=1)
         self.parent.grid_rowconfigure(0, weight=1)
 
-        card, body = self._make_card(self.parent, "图源列表", "拖动右侧把手调整优先级；关闭开关后，该图源不会作为自动回退图源。")
+        card, body = make_card(self.parent, "图源列表", "拖动右侧把手调整优先级；关闭开关后，该图源不会作为自动回退图源。")
         card.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=8)
 
         self.list_frame = ctk.CTkScrollableFrame(body, fg_color="transparent")
@@ -46,7 +40,7 @@ class SourceManagerView:
 
         ctk.CTkButton(body, text="＋ 新建自定义图源", height=38, command=self.new_source).pack(fill=tk.X, pady=(10, 0))
 
-        card, body = self._make_card(self.parent, "图源编辑器", "每个自定义图源都可以单独设置 URL、尺寸、参数与网络重试。")
+        card, body = make_card(self.parent, "图源编辑器", "每个自定义图源都可以单独设置 URL、尺寸、参数与网络重试。")
         card.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=8)
 
         self.editor_title = ctk.CTkLabel(body, text="选择一个图源开始编辑", font=("Microsoft YaHei", 16, "bold"), anchor="w")
@@ -160,8 +154,6 @@ class SourceManagerView:
         self.edit_enabled.set(source.get("enabled", True))
         readonly = source.get("builtin", False)
         # 内置图源允许复制参数，但不允许覆盖/删除。
-        for var in (self.edit_name, self.edit_url):
-            pass
         self._set_editor_state("disabled" if readonly else "normal")
 
     def _set_editor_state(self, state):

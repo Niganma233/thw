@@ -1,6 +1,4 @@
 import os
-import re
-import time
 import tkinter as tk
 from tkinter import messagebox
 
@@ -10,6 +8,7 @@ from PIL import Image
 import config
 import wallpaper_service
 from fixed_combobox import FixedHeightComboBox
+from ui_widgets import make_card, open_folder
 
 
 class FavoriteView:
@@ -20,23 +19,14 @@ class FavoriteView:
         self._preview_img = None
         self._build()
 
-    def _card(self, parent, title, subtitle=None):
-        card = ctk.CTkFrame(parent, corner_radius=14, border_width=1)
-        ctk.CTkLabel(card, text=title, font=("Microsoft YaHei", 14, "bold"), anchor="w").pack(anchor=tk.W, padx=16, pady=(14, 2))
-        if subtitle:
-            ctk.CTkLabel(card, text=subtitle, font=("Microsoft YaHei", 10), text_color=("gray45", "gray60")).pack(anchor=tk.W, padx=16, pady=(0, 8))
-        body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(2, 14))
-        return card, body
-
     def _build(self):
         self.parent.grid_columnconfigure(0, weight=0, minsize=350)
         self.parent.grid_columnconfigure(1, weight=1)
         self.parent.grid_rowconfigure(0, weight=1)
-        card, body = self._card(self.parent, "收藏管理", "收藏、选择、应用、删除都集中在这里。")
+        card, body = make_card(self.parent, "收藏管理", "收藏、选择、应用、删除都集中在这里。")
         card.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=8)
         ctk.CTkButton(body, text="⭐ 收藏当前壁纸", height=38, command=self.app.favorite_current_wallpaper).pack(fill=tk.X, pady=4)
-        ctk.CTkButton(body, text="📂 打开收藏夹", height=38, command=lambda: os.startfile(config.FAVORITES_DIR)).pack(fill=tk.X, pady=4)
+        ctk.CTkButton(body, text="📂 打开收藏夹", height=38, command=lambda: open_folder(config.FAVORITES_DIR)).pack(fill=tk.X, pady=4)
         ctk.CTkLabel(body, text="已收藏壁纸", font=("Microsoft YaHei", 12, "bold")).pack(anchor=tk.W, pady=(13, 4))
         self.fav_combo_var = tk.StringVar()
         # 收藏数量再多，下拉列表也只显示固定高度的 8 项（其余滚动查看），
@@ -75,7 +65,7 @@ class FavoriteView:
                 command=self._mark_dirty
             ).pack(anchor=tk.W, pady=3)
 
-        card, body = self._card(self.parent, "预览", "当前选中收藏的预览图。")
+        card, body = make_card(self.parent, "预览", "当前选中收藏的预览图。")
         card.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=8)
         self.preview_label = ctk.CTkLabel(body, text="暂无预览", corner_radius=12, font=("Microsoft YaHei", 12), fg_color=("gray92", "gray18"))
         self.preview_label.pack(fill=tk.BOTH, expand=True)

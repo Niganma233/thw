@@ -6,15 +6,21 @@
 
 Tk 初始化失败时（无显示环境）自动跳过，不会让整套测试失败。
 """
-import contextlib
-import copy
 import os
 import unittest
 from pathlib import Path
 
 from PIL import Image
 
-from tests.helpers import IsolatedDataDir, config, default_cfg, make_bare_app, wallpaper_service
+from tests.helpers import (
+    IsolatedDataDir,
+    collect_widgets,
+    config,
+    default_cfg,
+    make_bare_app,
+    tk_root,
+    wallpaper_service,
+)
 
 
 def _ctk():
@@ -22,32 +28,9 @@ def _ctk():
     return ctk
 
 
-@contextlib.contextmanager
-def tk_root():
-    try:
-        ctk = _ctk()
-        root = ctk.CTk()
-    except Exception as exc:  # pragma: no cover - 只在无显示环境触发
-        raise unittest.SkipTest(f"无法创建 Tk 窗口：{exc}")
-    root.withdraw()
-    try:
-        yield root
-    finally:
-        try:
-            root.destroy()
-        except Exception:
-            pass
-
-
 def collect_entries(widget):
     """深度收集控件树里所有 CTkEntry。"""
-    ctk = _ctk()
-    found = []
-    for child in widget.winfo_children():
-        if isinstance(child, ctk.CTkEntry):
-            found.append(child)
-        found.extend(collect_entries(child))
-    return found
+    return collect_widgets(widget, _ctk().CTkEntry)
 
 
 def make_png(path, size=(40, 30), color="red"):
@@ -102,6 +85,20 @@ class SettingsViewSmokeTest(unittest.TestCase):
             with tk_root() as root:
                 view = self._build(root)
         self.assertIn("1 张图片", view.cache_info_var.get())
+
+    def test_style_keys_match_service(self):
+        # settings_view 的显示标签与 wallpaper_service 的注册表取值必须覆盖同一组
+        # 样式键，否则会出现"界面上能选但这个样式设不进去"，或反过来漏掉一个样式。
+        with IsolatedDataDir(), tk_root() as root:
+            view = self._build(root)
+            self.assertEqual(set(view.style_map), set(wallpaper_service.WALLPAPER_STYLES))
+
+    def test_interval_keys_are_unique(self):
+        # interval_map 是 标签->分钟 的映射，反向查找（collect）依赖取值唯一，
+        # 否则会静默取到错的那个间隔。
+        with IsolatedDataDir(), tk_root() as root:
+            values = list(self._build(root).interval_map.values())
+        self.assertEqual(len(values), len(set(values)))
 
 
 class FixedHeightComboBoxSmokeTest(unittest.TestCase):
@@ -224,7 +221,7 @@ class FavoriteViewSmokeTest(unittest.TestCase):
 
 
 class SourceManagerViewSmokeTest(unittest.TestCase):
-    def _view(self, root, cfg=None):
+    def _view(self, root, cfg=None, manager=None):
         from source_manager_view import SourceManagerView
         cfg = default_cfg() if cfg is None else cfg
         changes = []
@@ -233,11 +230,26 @@ class SourceManagerViewSmokeTest(unittest.TestCase):
         # 回调契约：gui.WallpaperApp._source_changed(save=False)，所以必须接受
         # save 关键字参数。
         view = SourceManagerView(
-            tab, cfg,
+            tab, cfg, manager=manager,
             on_changed=lambda save=False: changes.append(save),
             on_status=lambda text, kind="ready": statuses.append((text, kind)),
         )
         return view, cfg, changes, statuses
+
+    def test_injected_manager_is_reused(self):
+        # WallpaperApp 把自己已经持有的 SourceManager 注入进来，避免在同一份 cfg
+        # 上重复跑迁移，也避免两个实例各持一份状态。
+        from source_manager import SourceManager
+        cfg = default_cfg()
+        manager = SourceManager(cfg)
+        with IsolatedDataDir(), tk_root() as root:
+            view, _, _, _ = self._view(root, cfg, manager=manager)
+            self.assertIs(view.manager, manager)
+
+    def test_standalone_view_builds_its_own_manager(self):
+        with IsolatedDataDir(), tk_root() as root:
+            view, _, _, _ = self._view(root)
+            self.assertIsNotNone(view.manager)
 
     def test_lists_builtins_and_custom_sources(self):
         from source_manager import BUILTIN_SOURCES
