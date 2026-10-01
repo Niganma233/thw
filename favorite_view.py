@@ -9,6 +9,7 @@ from PIL import Image
 
 import config
 import wallpaper_service
+from fixed_combobox import FixedHeightComboBox
 
 
 class FavoriteView:
@@ -38,7 +39,16 @@ class FavoriteView:
         ctk.CTkButton(body, text="📂 打开收藏夹", height=38, command=lambda: os.startfile(config.FAVORITES_DIR)).pack(fill=tk.X, pady=4)
         ctk.CTkLabel(body, text="已收藏壁纸", font=("Microsoft YaHei", 12, "bold")).pack(anchor=tk.W, pady=(13, 4))
         self.fav_combo_var = tk.StringVar()
-        self.fav_combo = ctk.CTkComboBox(body, variable=self.fav_combo_var, state="readonly", command=lambda _: self.update_preview())
+        # 收藏数量再多，下拉列表也只显示固定高度的 8 项（其余滚动查看），
+        # 列表宽度与控件一致，左右边缘和上方按钮对齐。
+        self.fav_combo = FixedHeightComboBox(
+            body,
+            variable=self.fav_combo_var,
+            state="readonly",
+            max_visible_items=8,
+            dropdown_font=("Microsoft YaHei", 12),
+            command=lambda _: self.update_preview(),
+        )
         self.fav_combo.pack(fill=tk.X, pady=3)
         btns = ctk.CTkFrame(body, fg_color="transparent")
         btns.pack(fill=tk.X, pady=(10, 4))

@@ -28,8 +28,12 @@ DEFAULT_CONFIG = {
 
 
 def ensure_dirs():
-    os.makedirs(FAVORITES_DIR, exist_ok=True)
-    os.makedirs(CACHE_DIR, exist_ok=True)
+    for path in (FAVORITES_DIR, CACHE_DIR):
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError:
+            # 目录建不出来时不要直接崩溃：界面启动后会提示"数据目录不可写"
+            pass
 
 
 def load_config():

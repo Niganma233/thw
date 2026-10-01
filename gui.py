@@ -1,8 +1,10 @@
 import os
 import queue
+import tempfile
 import threading
 import time
 import tkinter as tk
+import traceback
 from tkinter import messagebox
 
 import customtkinter as ctk
@@ -49,12 +51,15 @@ class WallpaperApp:
 
         self._backup_original_wallpaper()
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
+        # 窗口化运行时回调里的异常默认没人看得到，统一显示到状态栏，避免"点了没反应"
+        self.root.report_callback_exception = self._report_callback_exception
         self.init_ui()
         self.favorite_view.refresh()
         self.source_view.refresh()
         self.init_tray_icon()
         self.register_hotkeys()
         self.set_status("在线轮播就绪", "ready")
+        self._warn_if_data_dir_readonly(show_dialog=not silent)
 
         if self.cfg.get("refresh_on_startup", True):
             self.fetch_and_set_wallpaper()
@@ -141,6 +146,31 @@ class WallpaperApp:
         colors = {"ready": ("#3a9d6b", "#5ec48d"), "busy": ("#d59b35", "#e9b95d"), "error": ("#d65a5a", "#f07a7a"), "favorite": ("#bf8c2e", "#e6b954")}
         self.status_var.set(text)
         self.status_dot.configure(text_color=colors.get(kind, colors["ready"]))
+
+    def _report_callback_exception(self, exc_type, exc_value, exc_traceback):
+        """把按钮回调里未处理的异常显示到状态栏：窗口化运行时否则完全看不到，表现为"点了没反应"。"""
+        traceback.print_exception(exc_type, exc_value, exc_traceback)
+        try:
+            self.set_status(f"操作失败：{exc_type.__name__}: {exc_value}", "error")
+        except Exception:
+            pass
+
+    def _warn_if_data_dir_readonly(self, show_dialog=True):
+        """数据目录不可写时立刻提示，否则收藏、缓存、设置都会静默失败。"""
+        try:
+            handle, probe = tempfile.mkstemp(prefix="write_test_", dir=config.APP_DIR)
+            os.close(handle)
+            os.remove(probe)
+            return
+        except OSError as exc:
+            self.set_status(f"数据目录不可写：{exc}", "error")
+            if show_dialog:
+                messagebox.showwarning(
+                    "数据目录不可写",
+                    f"无法写入：\n{config.APP_DIR}\n\n收藏、缓存和设置都无法保存。\n"
+                    "请检查该目录的写入权限（安全软件拦截、以受限权限运行、程序被限制在工作区里都可能造成）。",
+                    parent=self.root,
+                )
 
     # ---------- 收藏兼容入口 ----------
     def favorite_current_wallpaper(self):
@@ -346,28 +376,37 @@ class WallpaperApp:
     def hide_to_tray(self):
         if self._closing:
             return
-        self.apply_settings(show_msg=False)
+        # 保存失败时留在界面上并提示，而不是"点了没反应"
+        if not self.apply_settings(show_msg=False):
+            return
         self.root.withdraw()
 
     def apply_settings(self, show_msg=True):
         old_interval = self.cfg.get("interval_minutes", 30)
         old_favorite_behavior = self.cfg.get("favorite_behavior")
-        self.cfg.update(self.settings_view.collect())
-        self.cfg.update(self.favorite_view.collect())
-        config.save_config(self.cfg)
-        config.set_auto_start_registry(self.cfg["auto_start"])
-        self.register_hotkeys()
-        # Windows 的 WallpaperStyle 注册表值通常要在重新应用壁纸后才会立即生效。
-        wallpaper_service.set_wallpaper_style(self.cfg["wallpaper_style"])
-        current = self.current_applied_wallpaper
-        if current and os.path.isfile(current):
-            wallpaper_service.set_wallpaper_windows(current)
+        try:
+            self.cfg.update(self.settings_view.collect())
+            self.cfg.update(self.favorite_view.collect())
+            config.save_config(self.cfg)
+            config.set_auto_start_registry(self.cfg["auto_start"])
+            self.register_hotkeys()
+            # Windows 的 WallpaperStyle 注册表值通常要在重新应用壁纸后才会立即生效。
+            wallpaper_service.set_wallpaper_style(self.cfg["wallpaper_style"])
+            current = self.current_applied_wallpaper
+            if current and os.path.isfile(current):
+                wallpaper_service.set_wallpaper_windows(current)
+        except Exception as exc:
+            self.set_status(f"保存设置失败：{exc}", "error")
+            if show_msg:
+                messagebox.showerror("保存设置失败", str(exc), parent=self.root)
+            return False
         if old_interval != self.cfg["interval_minutes"] or old_favorite_behavior != self.cfg.get("favorite_behavior"):
             self.reset_refresh_timer()
         else:
             self._update_countdown()
         if show_msg:
             messagebox.showinfo("设置已保存", "设置已保存并生效。", parent=self.root)
+        return True
 
     def quit_and_restore(self):
         if self._closing:
@@ -375,15 +414,21 @@ class WallpaperApp:
         self._closing = True
         try:
             if self.tray_icon:
-                self.tray_icon.stop()
-        except Exception:
-            pass
-        try:
+                try:
+                    self.tray_icon.stop()
+                except Exception:
+                    pass
             if keyboard is not None:
-                keyboard.unhook_all_hotkeys()
-        except Exception:
-            pass
-        path = self.cfg.get("original_wallpaper", "")
-        if path and os.path.isfile(path):
-            wallpaper_service.set_wallpaper_windows(path)
-        self.root.destroy()
+                try:
+                    keyboard.unhook_all_hotkeys()
+                except Exception:
+                    pass
+            path = self.cfg.get("original_wallpaper", "")
+            if path and os.path.isfile(path):
+                wallpaper_service.set_wallpaper_windows(path)
+            self.root.destroy()
+        except Exception as exc:
+            # 退出途中出错时把锁恢复，否则"退出/托盘"按钮会永久失效
+            self._closing = False
+            self.set_status(f"退出失败：{exc}", "error")
+            messagebox.showerror("退出失败", str(exc), parent=self.root)
