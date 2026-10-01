@@ -7,8 +7,8 @@ from PIL import Image
 
 import config
 import wallpaper_service
-from fixed_combobox import FixedHeightComboBox
-from ui_widgets import make_card, open_folder
+from ui.fixed_combobox import FixedHeightComboBox
+from ui.widgets import make_card, open_folder
 
 
 class FavoriteView:

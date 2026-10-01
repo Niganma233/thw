@@ -4,7 +4,9 @@ import sys
 from tkinter import messagebox
 
 import customtkinter as ctk
+
 from gui import WallpaperApp
+from ui import theme
 
 _INSTANCE_LOCK_HANDLE = None
 
@@ -35,6 +37,10 @@ atexit.register(release_single_instance_lock)
 
 
 def main():
+    # 必须在创建任何 CTk 控件之前设置全局外观。
+    # 以前这一步写在 gui.py 的模块顶层，靠 import 副作用生效——"什么时候生效"
+    # 完全看不出来，而且 import gui 就会改全局状态。
+    theme.apply()
     silent = "--silent" in sys.argv
     if not acquire_single_instance_lock():
         if not silent:

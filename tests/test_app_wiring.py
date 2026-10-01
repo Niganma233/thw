@@ -72,7 +72,8 @@ class AppWiringTest(unittest.TestCase):
     def test_status_starts_ready(self):
         with IsolatedDataDir(), tk_root() as root:
             app, _ = self._construct(root)
-            self.assertEqual(app.status_var.get(), "在线轮播就绪")
+            self.assertEqual(app.status.var.get(), "在线轮播就绪")
+            self.assertEqual(app.status.text, "在线轮播就绪")
 
     def test_favorite_view_is_populated_on_startup(self):
         with IsolatedDataDir(), tk_root() as root:

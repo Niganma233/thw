@@ -7,6 +7,7 @@
 Tk 初始化失败时（无显示环境）自动跳过，不会让整套测试失败。
 """
 import unittest
+import unittest.mock as mock
 from pathlib import Path
 
 from PIL import Image
@@ -38,7 +39,7 @@ def make_png(path, size=(40, 30), color="red"):
 
 class SettingsViewSmokeTest(unittest.TestCase):
     def _build(self, root, **overrides):
-        from settings_view import SettingsView
+        from ui.settings_view import SettingsView
         tab = _ctk().CTkFrame(root)
         return SettingsView(tab, default_cfg(**overrides))
 
@@ -101,13 +102,13 @@ class SettingsViewSmokeTest(unittest.TestCase):
 
 class FixedHeightComboBoxSmokeTest(unittest.TestCase):
     def test_builds_with_values(self):
-        from fixed_combobox import FixedHeightComboBox
+        from ui.fixed_combobox import FixedHeightComboBox
         with tk_root() as root:
             combo = FixedHeightComboBox(root, values=["a", "b", "c"], max_visible_items=2)
             self.assertFalse(combo.is_dropdown_open())
 
     def test_open_then_close_dropdown(self):
-        from fixed_combobox import FixedHeightComboBox
+        from ui.fixed_combobox import FixedHeightComboBox
         with tk_root() as root:
             combo = FixedHeightComboBox(root, values=["a", "b", "c"])
             combo.pack()
@@ -118,14 +119,14 @@ class FixedHeightComboBoxSmokeTest(unittest.TestCase):
             self.assertFalse(combo.is_dropdown_open())
 
     def test_close_when_not_open_is_safe(self):
-        from fixed_combobox import FixedHeightComboBox
+        from ui.fixed_combobox import FixedHeightComboBox
         with tk_root() as root:
             combo = FixedHeightComboBox(root, values=["a"])
             combo.close_dropdown()
             self.assertFalse(combo.is_dropdown_open())
 
     def test_configure_values_closes_open_dropdown(self):
-        from fixed_combobox import FixedHeightComboBox
+        from ui.fixed_combobox import FixedHeightComboBox
         with tk_root() as root:
             combo = FixedHeightComboBox(root, values=["a", "b"])
             combo.pack()
@@ -135,14 +136,14 @@ class FixedHeightComboBoxSmokeTest(unittest.TestCase):
             self.assertFalse(combo.is_dropdown_open())
 
     def test_empty_values_do_not_open(self):
-        from fixed_combobox import FixedHeightComboBox
+        from ui.fixed_combobox import FixedHeightComboBox
         with tk_root() as root:
             combo = FixedHeightComboBox(root, values=[])
             combo._open_dropdown_menu()
             self.assertFalse(combo.is_dropdown_open())
 
     def test_choosing_index_sets_value_and_fires_command(self):
-        from fixed_combobox import FixedHeightComboBox
+        from ui.fixed_combobox import FixedHeightComboBox
         with tk_root() as root:
             picked = []
             combo = FixedHeightComboBox(root, values=["a", "b", "c"], command=picked.append)
@@ -156,7 +157,7 @@ class FixedHeightComboBoxSmokeTest(unittest.TestCase):
 
 class FavoriteViewSmokeTest(unittest.TestCase):
     def _view(self, root):
-        from favorite_view import FavoriteView
+        from ui.favorite_view import FavoriteView
         app = make_bare_app()
         app.favorite_current_wallpaper = lambda: None
         app.on_favorite_behavior_changed = lambda behavior: None
@@ -210,7 +211,7 @@ class FavoriteViewSmokeTest(unittest.TestCase):
 
     def test_legacy_config_maps_to_carousel(self):
         with IsolatedDataDir(), tk_root() as root:
-            from favorite_view import FavoriteView
+            from ui.favorite_view import FavoriteView
             app = make_bare_app(default_cfg(favorite_behavior=None, favorite_carousel=True))
             app.favorite_current_wallpaper = lambda: None
             tab = _ctk().CTkFrame(root)
@@ -220,7 +221,7 @@ class FavoriteViewSmokeTest(unittest.TestCase):
 
 class SourceManagerViewSmokeTest(unittest.TestCase):
     def _view(self, root, cfg=None, manager=None):
-        from source_manager_view import SourceManagerView
+        from ui.source_manager_view import SourceManagerView
         cfg = default_cfg() if cfg is None else cfg
         changes = []
         statuses = []
@@ -286,6 +287,57 @@ class SourceManagerViewSmokeTest(unittest.TestCase):
             states = {entry.cget("state") for entry in collect_entries(view.parent)}
         self.assertEqual(states, {"normal"}, "自定义图源应当可编辑")
 
+    def test_editor_tracks_exactly_six_controls(self):
+        with IsolatedDataDir(), tk_root() as root:
+            view, _, _, _ = self._view(root)
+            self.assertEqual(len(view._editor_controls), 6)
+
+    def test_builtin_disables_combos_too(self):
+        # 旧实现只遍历 CTkEntry，site / size 两个下拉框在内置图源下仍可改，
+        # 与"内置图源只读"的意图不符。
+        with IsolatedDataDir(), tk_root() as root:
+            view, _, _, _ = self._view(root)
+            view.select("all")
+            combo_states = {
+                view._site_combo.cget("state"),
+                view._size_combo.cget("state"),
+            }
+            entry_states = {
+                view._name_entry.cget("state"),
+                view._url_entry.cget("state"),
+                view._timeout_entry.cget("state"),
+                view._retries_entry.cget("state"),
+            }
+        self.assertEqual(combo_states, {"disabled"})
+        self.assertEqual(entry_states, {"disabled"})
+
+    def test_custom_source_keeps_combos_readonly_not_free_text(self):
+        # 可编辑时下拉框必须是 readonly：normal 会允许自由输入，
+        # 用户就能把 {site}/{size} 填成列表以外的值。
+        cfg = default_cfg()
+        cfg["sources"] = [{"id": "custom_1", "name": "我的源", "url": "https://e.com/r",
+                           "site": "all", "size": "pc", "timeout": 15, "retries": 3,
+                           "enabled": True, "builtin": False}]
+        with IsolatedDataDir(), tk_root() as root:
+            view, _, _, _ = self._view(root, cfg)
+            view.select("custom_1")
+            self.assertEqual(view._site_combo.cget("state"), "readonly")
+            self.assertEqual(view._size_combo.cget("state"), "readonly")
+            self.assertEqual(view._name_entry.cget("state"), "normal")
+
+    def test_editor_state_does_not_leak_outside_the_editor(self):
+        # 这是本次修复的核心：原来递归遍历整棵 self.parent 子树去禁用所有
+        # CTkEntry，图源列表卡片里只要出现输入框就会被一起禁用。
+        ctk = _ctk()
+        with IsolatedDataDir(), tk_root() as root:
+            view, _, _, _ = self._view(root)
+            # 该容器已经用 grid 布局，这里也必须用 grid
+            outsider = ctk.CTkEntry(view.parent)
+            outsider.grid(row=9, column=0)
+            view.select("all")
+            self.assertEqual(outsider.cget("state"), "normal", "编辑器以外的输入框不应被改动")
+            self.assertEqual(view._name_entry.cget("state"), "disabled")
+
     def test_new_source_clears_editor(self):
         with IsolatedDataDir(), tk_root() as root:
             view, _, _, statuses = self._view(root)
@@ -294,7 +346,32 @@ class SourceManagerViewSmokeTest(unittest.TestCase):
             self.assertEqual(view.edit_name.get(), "")
             self.assertEqual(view.edit_url.get(), "")
             self.assertEqual(view.edit_timeout.get(), "15")
+            self.assertEqual(view._name_entry.cget("state"), "normal")
+            self.assertEqual(view._site_combo.cget("state"), "readonly")
         self.assertEqual(statuses[-1][1], "ready")
+
+    def test_saving_while_a_builtin_is_selected_is_refused(self):
+        # 不加闸的话会以该内置源的 id 往 cfg["sources"] 里塞一条自定义图源，
+        # 而 SourceManager.get() 先查内置表，于是它永远取不到，只会制造重复 id。
+        with IsolatedDataDir(), tk_root() as root:
+            view, cfg, changes, _ = self._view(root)
+            view.select("all")
+            notifications_before = len(changes)
+            with mock.patch("tkinter.messagebox.showinfo") as info:
+                view.save()
+            self.assertEqual(cfg["sources"], [], "内置图源下保存不应产生任何自定义图源")
+            self.assertTrue(info.called, "应当提示用户内置图源不能修改")
+            self.assertEqual(len(changes), notifications_before, "被拒绝时不应触发 on_changed")
+
+    def test_saving_a_custom_source_still_works(self):
+        with IsolatedDataDir(), tk_root() as root:
+            view, cfg, _, _ = self._view(root)
+            view.new_source()
+            view.edit_name.set("新源")
+            view.edit_url.set("https://new.example/r")
+            view.save()
+            names = [s["name"] for s in cfg["sources"]]
+        self.assertEqual(names, ["新源"])
 
     def test_toggle_disables_custom_source(self):
         cfg = default_cfg()

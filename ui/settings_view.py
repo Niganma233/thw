@@ -3,7 +3,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 import wallpaper_service
-from ui_widgets import make_card
+from ui.widgets import make_card
 
 
 class SettingsView:

@@ -1,17 +1,14 @@
-"""跨视图共享的界面小工具。
+"""跨视图共享的界面控件构造工具。
 
 三个视图（常规设置、图源管理、收藏）原本各自复制了一份 ``_make_card``/``_card``，
 版式要调整就得改三遍、还容易改漏，所以集中到这里。
-
-Phase 7 迁入包结构后本模块会变成 ``ui/widgets.py``。
 """
 import os
 import tkinter as tk
 
 import customtkinter as ctk
 
-# 副标题统一使用的次要文字色（浅色外观 / 深色外观）
-SUBTITLE_COLOR = ("gray45", "gray60")
+from ui import theme
 
 
 def make_card(parent, title, subtitle=None):
@@ -21,15 +18,15 @@ def make_card(parent, title, subtitle=None):
     往里放实际控件，已经带好统一的内边距。
     """
     card = ctk.CTkFrame(parent, corner_radius=14, border_width=1)
-    ctk.CTkLabel(
-        card, text=title, font=("Microsoft YaHei", 14, "bold"), anchor="w"
-    ).pack(anchor=tk.W, padx=16, pady=(14, 2))
+    ctk.CTkLabel(card, text=title, font=theme.FONT_TITLE, anchor="w").pack(
+        anchor=tk.W, padx=16, pady=(14, 2)
+    )
     if subtitle:
         ctk.CTkLabel(
             card,
             text=subtitle,
-            font=("Microsoft YaHei", 10),
-            text_color=SUBTITLE_COLOR,
+            font=theme.FONT_SUBTITLE,
+            text_color=theme.COLOR_MUTED,
             justify="left",
         ).pack(anchor=tk.W, padx=16, pady=(0, 8))
     body = ctk.CTkFrame(card, fg_color="transparent")

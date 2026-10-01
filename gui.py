@@ -4,7 +4,6 @@ import tempfile
 import threading
 import time
 import tkinter as tk
-import traceback
 from tkinter import messagebox
 
 import customtkinter as ctk
@@ -19,14 +18,13 @@ except ImportError:
 
 import config
 import wallpaper_service
-from favorite_view import FavoriteView
-from settings_view import SettingsView
-from source_manager_view import SourceManagerView
 from source_manager import SourceManager
-from ui_widgets import open_folder
-
-ctk.set_appearance_mode("system")
-ctk.set_default_color_theme("blue")
+from ui import theme
+from ui.favorite_view import FavoriteView
+from ui.settings_view import SettingsView
+from ui.source_manager_view import SourceManagerView
+from ui.status_bar import StatusPresenter
+from ui.widgets import open_folder
 
 
 class WallpaperApp:
@@ -52,14 +50,14 @@ class WallpaperApp:
 
         self._backup_original_wallpaper()
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
-        # 窗口化运行时回调里的异常默认没人看得到，统一显示到状态栏，避免"点了没反应"
-        self.root.report_callback_exception = self._report_callback_exception
         self.init_ui()
+        # 窗口化运行时回调里的异常默认没人看得到，统一显示到状态栏，避免"点了没反应"。
+        # 必须在 init_ui() 之后：状态栏由 StatusPresenter 负责。
+        self.status.install_exception_hook(self.root)
         self.favorite_view.refresh()
         self.source_view.refresh()
         self.init_tray_icon()
         self.register_hotkeys()
-        self.set_status("在线轮播就绪", "ready")
         self._warn_if_data_dir_readonly(show_dialog=not silent)
 
         if self.cfg.get("refresh_on_startup", True):
@@ -83,19 +81,14 @@ class WallpaperApp:
         header.pack(fill=tk.X, pady=(0, 14))
         brand = ctk.CTkFrame(header, fg_color="transparent")
         brand.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=20, pady=16)
-        ctk.CTkLabel(brand, text="🌸  Touhou Wallpaper", font=("Microsoft YaHei", 21, "bold"), anchor="w").pack(anchor=tk.W)
-        ctk.CTkLabel(brand, text="自动更换东方 Project 壁纸 · 图源可自定义", font=("Microsoft YaHei", 11), text_color=("gray40", "gray65"), anchor="w").pack(anchor=tk.W, pady=(2, 0))
+        ctk.CTkLabel(brand, text="🌸  Touhou Wallpaper", font=theme.FONT_BRAND, anchor="w").pack(anchor=tk.W)
+        ctk.CTkLabel(brand, text="自动更换东方 Project 壁纸 · 图源可自定义", font=theme.FONT_BODY, text_color=theme.COLOR_MUTED_STRONG, anchor="w").pack(anchor=tk.W, pady=(2, 0))
 
-        status_box = ctk.CTkFrame(header, corner_radius=12, fg_color=("gray92", "gray18"))
-        status_box.pack(side=tk.RIGHT, padx=18, pady=14)
-        self.status_dot = ctk.CTkLabel(status_box, text="●", font=("Arial", 13, "bold"))
-        self.status_dot.pack(side=tk.LEFT, padx=(12, 4), pady=10)
-        self.status_var = tk.StringVar(value="在线轮播就绪")
-        ctk.CTkLabel(status_box, textvariable=self.status_var, font=("Microsoft YaHei", 11, "bold")).pack(side=tk.LEFT, padx=(0, 12))
+        self.status = StatusPresenter(header, initial_text="在线轮播就绪")
 
         actions = ctk.CTkFrame(container, fg_color="transparent")
         actions.pack(fill=tk.X, pady=(0, 14))
-        self.next_btn = ctk.CTkButton(actions, text="🎲  换一张", height=42, font=("Microsoft YaHei", 13, "bold"), command=self.fetch_and_set_wallpaper)
+        self.next_btn = ctk.CTkButton(actions, text="🎲  换一张", height=42, font=theme.FONT_COMBO, command=self.fetch_and_set_wallpaper)
         self.next_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
         ctk.CTkButton(actions, text="⭐  收藏当前", height=42, command=self.favorite_current_wallpaper).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
         ctk.CTkButton(actions, text="📂  打开收藏夹", height=42, command=lambda: open_folder(config.FAVORITES_DIR)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
@@ -136,17 +129,12 @@ class WallpaperApp:
             config.save_config(self.cfg)
 
     def set_status(self, text, kind="ready"):
-        colors = {"ready": ("#3a9d6b", "#5ec48d"), "busy": ("#d59b35", "#e9b95d"), "error": ("#d65a5a", "#f07a7a"), "favorite": ("#bf8c2e", "#e6b954")}
-        self.status_var.set(text)
-        self.status_dot.configure(text_color=colors.get(kind, colors["ready"]))
+        """更新状态栏。
 
-    def _report_callback_exception(self, exc_type, exc_value, exc_traceback):
-        """把按钮回调里未处理的异常显示到状态栏：窗口化运行时否则完全看不到，表现为"点了没反应"。"""
-        traceback.print_exception(exc_type, exc_value, exc_traceback)
-        try:
-            self.set_status(f"操作失败：{exc_type.__name__}: {exc_value}", "error")
-        except Exception:
-            pass
+        保留这个方法是刻意的：视图通过 ``on_status=self.set_status`` 拿到它，
+        它是一个对外接口，而不是纯粹的转发包装。
+        """
+        self.status.set(text, kind)
 
     def _warn_if_data_dir_readonly(self, show_dialog=True):
         """数据目录不可写时立刻提示，否则收藏、缓存、设置都会静默失败。"""

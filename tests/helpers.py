@@ -124,6 +124,19 @@ def default_cfg(**overrides):
     return cfg
 
 
+class FakeStatus:
+    """替代 ``ui.status_bar.StatusPresenter``，把状态写进共享的日志列表。"""
+
+    def __init__(self, log):
+        self._log = log
+
+    def set(self, text, kind="ready"):
+        self._log.append((text, kind))
+
+    def install_exception_hook(self, root):
+        pass
+
+
 def make_bare_app(cfg=None, mode="online"):
     """构造一个跳过 ``__init__`` 的 WallpaperApp，用于测试纯逻辑方法。
 
@@ -141,9 +154,10 @@ def make_bare_app(cfg=None, mode="online"):
     app._closing = False
     app.current_applied_wallpaper = ""
     app.countdown_var = FakeVar()
-    app.status_var = FakeVar()
     app.next_btn = FakeWidget()
     app.status_log = []
+    app.status = FakeStatus(app.status_log)
+    # set_status 是视图拿到的公开回调，测试里直接替换掉，断言走 status_log
     app.set_status = lambda text, kind="ready": app.status_log.append((text, kind))
     return app
 
@@ -152,8 +166,14 @@ def make_bare_app(cfg=None, mode="online"):
 def tk_root():
     """创建并隐藏一个真实的 CTk 根窗口。
 
+    会先调用 ``ui.theme.apply()``，与生产入口（wallpaper_changer.main）保持一致，
+    这样测试里的外观模式/配色主题和实际运行时完全相同。
+
     Tk 初始化失败时（无显示环境）抛 SkipTest，让整套测试优雅跳过而不是失败。
     """
+    from ui import theme
+
+    theme.apply()
     try:
         import customtkinter as ctk
         root = ctk.CTk()

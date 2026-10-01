@@ -8,7 +8,8 @@ import customtkinter as ctk
 import config
 import wallpaper_service
 from source_manager import SourceManager
-from ui_widgets import make_card
+from ui import theme
+from ui.widgets import make_card
 
 
 class SourceManagerView:
@@ -43,28 +44,43 @@ class SourceManagerView:
         card, body = make_card(self.parent, "图源编辑器", "每个自定义图源都可以单独设置 URL、尺寸、参数与网络重试。")
         card.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=8)
 
-        self.editor_title = ctk.CTkLabel(body, text="选择一个图源开始编辑", font=("Microsoft YaHei", 16, "bold"), anchor="w")
+        self.editor_title = ctk.CTkLabel(body, text="选择一个图源开始编辑", font=theme.FONT_HEADING, anchor="w")
         self.editor_title.pack(fill=tk.X, pady=(0, 12))
 
-        self.edit_name = self._field(body, "名称", "我的随机壁纸")
-        self.edit_url = self._field(body, "URL", "https://example.com/random?size={size}")
+        self.edit_name, self._name_entry = self._field(body, "名称", "我的随机壁纸")
+        self.edit_url, self._url_entry = self._field(body, "URL", "https://example.com/random?size={size}")
 
         grid = ctk.CTkFrame(body, fg_color="transparent")
         grid.pack(fill=tk.X, pady=5)
         grid.grid_columnconfigure((0, 1), weight=1)
-        self.edit_site = self._combo(grid, "{site} 参数", ["all", "konachan", "yandere"], 0)
-        self.edit_size = self._combo(grid, "{size} 参数", ["pc", "mobile"], 1)
+        self.edit_site, self._site_combo = self._combo(grid, "{site} 参数", ["all", "konachan", "yandere"], 0)
+        self.edit_size, self._size_combo = self._combo(grid, "{size} 参数", ["pc", "mobile"], 1)
 
         grid2 = ctk.CTkFrame(body, fg_color="transparent")
         grid2.pack(fill=tk.X, pady=5)
         grid2.grid_columnconfigure((0, 1), weight=1)
-        self.edit_timeout = self._entry(grid2, "超时（秒）", "15", 0)
-        self.edit_retries = self._entry(grid2, "失败重试次数", "3", 1)
+        self.edit_timeout, self._timeout_entry = self._entry(grid2, "超时（秒）", "15", 0)
+        self.edit_retries, self._retries_entry = self._entry(grid2, "失败重试次数", "3", 1)
+
+        # 随"内置图源只读 / 自定义图源可编辑"切换的控件，显式列出来并带上各自
+        # 可编辑时的 state。不能靠遍历控件树去猜：图源列表卡片里将来一旦出现
+        # 输入框就会被误禁用。
+        #
+        # 下拉框可编辑时必须是 "readonly" 而不是 "normal"——后者允许自由输入，
+        # 用户就能把 {site} / {size} 填成列表以外的值。
+        self._editor_controls = (
+            (self._name_entry, "normal"),
+            (self._url_entry, "normal"),
+            (self._site_combo, "readonly"),
+            (self._size_combo, "readonly"),
+            (self._timeout_entry, "normal"),
+            (self._retries_entry, "normal"),
+        )
 
         self.edit_enabled = tk.BooleanVar(value=True)
         ctk.CTkCheckBox(body, text="启用这个图源", variable=self.edit_enabled).pack(anchor=tk.W, pady=(8, 4))
         ctk.CTkLabel(body, text="支持：直接返回图片、302 跳转图片，或返回 {\"url\": \"图片地址\"}。占位符 {size} / {site} 会自动替换。",
-                     justify="left", wraplength=520, text_color=("gray45", "gray60")).pack(anchor=tk.W, pady=(5, 12))
+                     justify="left", wraplength=520, text_color=theme.COLOR_MUTED).pack(anchor=tk.W, pady=(5, 12))
 
         buttons = ctk.CTkFrame(body, fg_color="transparent")
         buttons.pack(fill=tk.X, pady=(4, 0))
@@ -72,6 +88,7 @@ class SourceManagerView:
         ctk.CTkButton(buttons, text="保存图源", height=38, command=self.save).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
         ctk.CTkButton(buttons, text="删除图源", height=38, fg_color="#8c4b4b", hover_color="#6d3838", command=self.delete).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
 
+    # 下面三个构造器都返回 (变量, 控件)：控件是 _set_editor_state 需要的。
     @staticmethod
     def _field(parent, label, placeholder):
         r = ctk.CTkFrame(parent, fg_color="transparent")
@@ -80,7 +97,7 @@ class SourceManagerView:
         var = tk.StringVar()
         entry = ctk.CTkEntry(r, textvariable=var, placeholder_text=placeholder)
         entry.pack(side=tk.RIGHT, fill=tk.X, expand=True)
-        return var
+        return var, entry
 
     @staticmethod
     def _entry(parent, label, default, col):
@@ -88,8 +105,9 @@ class SourceManagerView:
         frame.grid(row=0, column=col, sticky="ew", padx=4)
         ctk.CTkLabel(frame, text=label, anchor="w").pack(anchor=tk.W)
         var = tk.StringVar(value=default)
-        ctk.CTkEntry(frame, textvariable=var).pack(fill=tk.X, pady=(4, 0))
-        return var
+        entry = ctk.CTkEntry(frame, textvariable=var)
+        entry.pack(fill=tk.X, pady=(4, 0))
+        return var, entry
 
     @staticmethod
     def _combo(parent, label, values, col):
@@ -97,8 +115,9 @@ class SourceManagerView:
         frame.grid(row=0, column=col, sticky="ew", padx=4)
         ctk.CTkLabel(frame, text=label, anchor="w").pack(anchor=tk.W)
         var = tk.StringVar(value=values[0])
-        ctk.CTkComboBox(frame, variable=var, values=values, state="readonly").pack(fill=tk.X, pady=(4, 0))
-        return var
+        combo = ctk.CTkComboBox(frame, variable=var, values=values, state="readonly")
+        combo.pack(fill=tk.X, pady=(4, 0))
+        return var, combo
 
     def _row(self, source):
         row = ctk.CTkFrame(self.list_frame, corner_radius=10, border_width=1)
@@ -152,23 +171,26 @@ class SourceManagerView:
         self.edit_timeout.set(str(source.get("timeout", 15)))
         self.edit_retries.set(str(source.get("retries", 3)))
         self.edit_enabled.set(source.get("enabled", True))
-        readonly = source.get("builtin", False)
-        # 内置图源允许复制参数，但不允许覆盖/删除。
-        self._set_editor_state("disabled" if readonly else "normal")
+        # 内置图源允许查看/复制参数，但不允许覆盖或删除。
+        self._set_editor_state(not source.get("builtin", False))
 
-    def _set_editor_state(self, state):
-        # 找到编辑器中的 Entry，通过父级树遍历切换状态。
-        def walk(widget):
-            for child in widget.winfo_children():
-                if isinstance(child, ctk.CTkEntry):
-                    child.configure(state=state)
-                walk(child)
-        walk(self.parent)
+    def _set_editor_state(self, editable):
+        """把编辑器的 6 个控件切成可编辑或只读。
+
+        只作用于显式记录的 ``_editor_controls``。原来的实现是递归遍历整棵
+        ``self.parent`` 子树、把所有 ``CTkEntry`` 都改一遍，有两个问题：
+
+        1. 范围过宽——图源列表卡片里将来一旦出现输入框，就会跟着被禁用；
+        2. 漏控件——只处理 ``CTkEntry``，site / size 两个 ``CTkComboBox``
+           在内置图源下仍然可编辑，与"内置图源只读"的意图不符。
+        """
+        for control, editable_state in self._editor_controls:
+            control.configure(state=editable_state if editable else "disabled")
 
     def new_source(self):
         self.selected_id = None
         self.editor_title.configure(text="新建自定义图源")
-        self._set_editor_state("normal")
+        self._set_editor_state(True)
         self.edit_name.set("")
         self.edit_url.set("")
         self.edit_site.set("all")
@@ -179,6 +201,18 @@ class SourceManagerView:
         self.on_status("正在创建新的自定义图源", "ready")
 
     def save(self):
+        current = self.manager.get(self.selected_id) if self.selected_id else None
+        if current and current.get("builtin"):
+            # 不加这道闸的话，选中内置图源时点"保存图源"会以该内置源的 id
+            # 往 cfg["sources"] 里塞一条自定义图源，而 SourceManager.get() 先查
+            # 内置表，于是它永远取不到，只会污染候选列表、制造重复 id。
+            messagebox.showinfo(
+                "提示",
+                "内置图源不能修改。请点「＋ 新建自定义图源」新建一个，"
+                "或复制它的参数再保存。",
+                parent=self.parent,
+            )
+            return
         name = self.edit_name.get().strip()
         url = self.edit_url.get().strip()
         if not name or not url:
