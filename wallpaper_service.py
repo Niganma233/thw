@@ -1,259 +1,56 @@
-import ctypes
-import io
-import json
-import os
-import shutil
-import time
-import urllib.request
-import uuid
-import winreg
-from urllib.parse import urlparse
+"""兼容层：原先这个模块里的实现已按职责拆到 services/ 与 core/ 下。
 
-from PIL import Image
+拆分对照：
+    Windows 壁纸读写      -> services.wallpaper_win
+    图片字节解释          -> services.images
+    网络抓取与多图源回退  -> services.downloader
+    缓存落盘/统计/清理    -> services.cache
+    收藏夹读写            -> services.favorites
+    共享常量              -> core.constants
 
-from config import CACHE_DIR, FAVORITES_DIR
+这里只把原来的公开名字重新导出，让尚未迁移的调用方（四个视图）零改动。
+Phase 7 会把调用方直接指向新模块，然后删掉本文件——新代码请直接 import services.*。
+"""
+from core.constants import IMAGE_EXTENSIONS, WALLPAPER_STYLES  # noqa: F401
+from services.cache import clear_cache, format_bytes, get_cache_info  # noqa: F401
+from services.downloader import (  # noqa: F401
+    build_source_url,
+    download_wallpaper,
+    fetch_source_image,
+    fetch_with_retry,
+)
+from services.favorites import (  # noqa: F401
+    delete_favorite,
+    list_favorites,
+    safe_name,
+    save_favorite,
+)
+from services.wallpaper_win import (  # noqa: F401
+    get_current_windows_wallpaper,
+    set_wallpaper_style,
+    set_wallpaper_windows,
+)
 
-IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
-WALLPAPER_STYLES = {"fill": (10, 0), "fit": (6, 0), "center": (0, 0), "stretch": (2, 0)}
-
-
-def get_current_windows_wallpaper():
-    buffer = ctypes.create_unicode_buffer(1024)
-    ok = ctypes.windll.user32.SystemParametersInfoW(0x0073, len(buffer), buffer, 0)
-    return buffer.value if ok else ""
-
-
-def set_wallpaper_windows(img_path):
-    if not img_path or not os.path.isfile(img_path):
-        return False
-    return bool(ctypes.windll.user32.SystemParametersInfoW(20, 0, os.path.abspath(img_path), 3))
-
-
-def set_wallpaper_style(style_key):
-    wallpaper_style, tile_wallpaper = WALLPAPER_STYLES.get(style_key, WALLPAPER_STYLES["fill"])
-    key = None
-    try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop", 0, winreg.KEY_SET_VALUE)
-        winreg.SetValueEx(key, "WallpaperStyle", 0, winreg.REG_SZ, str(wallpaper_style))
-        winreg.SetValueEx(key, "TileWallpaper", 0, winreg.REG_SZ, str(tile_wallpaper))
-        return True
-    except OSError as exc:
-        print(f"设置壁纸显示方式失败: {exc}")
-        return False
-    finally:
-        if key is not None:
-            winreg.CloseKey(key)
-
-
-def fetch_with_retry(url, timeout=15, retries=3, backoff_base=2):
-    last_exc = None
-    for attempt in range(max(1, retries)):
-        try:
-            parsed = urlparse(url)
-            if parsed.scheme not in ("http", "https") or not parsed.netloc:
-                raise ValueError("只支持 http:// 或 https:// 图源地址")
-            req = urllib.request.Request(url, headers={"User-Agent": "TouhouWallpaper/3.0"})
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                return response.read(), response.headers.get_content_type()
-        except Exception as exc:
-            last_exc = exc
-            if attempt < max(1, retries) - 1:
-                time.sleep(backoff_base ** attempt)
-    raise last_exc
-
-
-def _detect_extension(img_data):
-    with Image.open(io.BytesIO(img_data)) as img:
-        img.verify()
-        fmt = (img.format or "JPEG").upper()
-    return {"JPEG": ".jpg", "JPG": ".jpg", "PNG": ".png", "WEBP": ".webp", "BMP": ".bmp"}.get(fmt, ".jpg")
-
-
-def _resolve_json_image_url(data):
-    try:
-        obj = json.loads(data.decode("utf-8"))
-    except Exception:
-        return None
-    if isinstance(obj, dict):
-        for key in ("url", "image", "image_url", "download_url", "src"):
-            value = obj.get(key)
-            if isinstance(value, str) and value.startswith(("http://", "https://")):
-                return value
-    return None
-
-
-def fetch_source_image(url, timeout=15, retries=3):
-    data, _ = fetch_with_retry(url, timeout=timeout, retries=retries)
-    try:
-        _detect_extension(data)
-        return data
-    except Exception:
-        image_url = _resolve_json_image_url(data)
-        if not image_url:
-            raise ValueError("图源没有直接返回图片，也没有找到可用的图片 URL")
-        data, _ = fetch_with_retry(image_url, timeout=timeout, retries=retries)
-        _detect_extension(data)
-        return data
-
-
-def build_source_url(source_url, site="all", size="pc"):
-    url = (source_url or "").strip()
-    if not url:
-        raise ValueError("图源地址不能为空")
-    try:
-        return url.format(size=size, site=site)
-    except (KeyError, ValueError) as exc:
-        raise ValueError(f"图源 URL 模板格式错误：{exc}") from exc
-
-
-def _cleanup_cache(keep_path, max_files=16):
-    try:
-        files = [os.path.join(CACHE_DIR, name) for name in os.listdir(CACHE_DIR) if name.lower().endswith(IMAGE_EXTENSIONS)]
-        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-        protected = os.path.abspath(keep_path) if keep_path else ""
-        for path in files[max_files:]:
-            if os.path.abspath(path) == protected:
-                continue
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-    except OSError:
-        pass
-
-
-def _write_wallpaper_file(img_data):
-    ext = _detect_extension(img_data)
-    if ext in (".webp", ".bmp"):
-        with Image.open(io.BytesIO(img_data)) as img:
-            out = io.BytesIO()
-            img.convert("RGB").save(out, format="PNG")
-            img_data = out.getvalue()
-            ext = ".png"
-    filename = f"wallpaper_{int(time.time())}_{uuid.uuid4().hex[:8]}{ext}"
-    path = os.path.join(CACHE_DIR, filename)
-    temp = path + ".tmp"
-    with open(temp, "wb") as f:
-        f.write(img_data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(temp, path)
-    _cleanup_cache(path)
-    return path
-
-
-def download_wallpaper(source, size_override=None, timeout=None, retries=None):
-    """按图源对象下载。size/timeout/retries 都可以由图源独立控制。"""
-    site = source.get("site", "all")
-    size = size_override or source.get("size", "pc")
-    timeout = int(timeout if timeout is not None else source.get("timeout", 15))
-    retries = int(retries if retries is not None else source.get("retries", 3))
-    url = build_source_url(source["url"], site=site, size=size)
-    img_data = fetch_source_image(url, timeout=timeout, retries=retries)
-    return _write_wallpaper_file(img_data)
-
-
-
-def get_cache_info():
-    """返回缓存图片数量和总字节数。"""
-    total = 0
-    count = 0
-    try:
-        for name in os.listdir(CACHE_DIR):
-            if not name.lower().endswith(IMAGE_EXTENSIONS):
-                continue
-            path = os.path.join(CACHE_DIR, name)
-            if os.path.isfile(path):
-                count += 1
-                try:
-                    total += os.path.getsize(path)
-                except OSError:
-                    pass
-    except OSError:
-        pass
-    return count, total
-
-
-def format_bytes(size):
-    """将字节数格式化为适合 UI 显示的文本。"""
-    value = float(max(0, size))
-    for unit in ("B", "KB", "MB", "GB"):
-        if value < 1024 or unit == "GB":
-            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
-        value /= 1024
-
-
-def clear_cache(keep_path=None):
-    """清理缓存图片；keep_path 用于保护当前正在使用的壁纸。
-
-    返回 (删除文件数, 释放字节数, 失败文件数)。
-    """
-    protected = os.path.abspath(keep_path) if keep_path and os.path.isfile(keep_path) else ""
-    deleted = 0
-    freed = 0
-    failed = 0
-    try:
-        names = os.listdir(CACHE_DIR)
-    except OSError:
-        return 0, 0, 0
-
-    for name in names:
-        if not name.lower().endswith(IMAGE_EXTENSIONS):
-            continue
-        path = os.path.join(CACHE_DIR, name)
-        if os.path.abspath(path) == protected:
-            continue
-        if not os.path.isfile(path):
-            continue
-        try:
-            size = os.path.getsize(path)
-            os.remove(path)
-            deleted += 1
-            freed += size
-        except OSError:
-            failed += 1
-    return deleted, freed, failed
-
-def list_favorites():
-    try:
-        files = [f for f in os.listdir(FAVORITES_DIR) if f.lower().endswith(IMAGE_EXTENSIONS)]
-    except OSError:
-        return []
-    return sorted(files, key=str.casefold)
-
-
-def safe_name(name):
-    """把用户输入的收藏名清洗成合法文件名（不含扩展名）。
-
-    公开函数：gui.py 的"收藏当前壁纸"对话框也要用它，之前那里手抄了一份同样的
-    清洗逻辑，两边容易改漏。
-    """
-    cleaned = "".join("_" if c in '<>:"/\\|?*' else c for c in name).strip().rstrip(".")
-    return cleaned or f"fav_{time.strftime('%Y%m%d_%H%M%S')}"
-
-
-def save_favorite(src_path, name):
-    if not src_path or not os.path.isfile(src_path):
-        raise FileNotFoundError("当前壁纸文件不存在")
-    base = safe_name(name)
-    ext = os.path.splitext(src_path)[1].lower()
-    if ext not in IMAGE_EXTENSIONS:
-        ext = ".jpg"
-    fav_filename = f"{base}{ext}"
-    fav_path = os.path.join(FAVORITES_DIR, fav_filename)
-    if os.path.exists(fav_path):
-        fav_filename = f"{base}_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}{ext}"
-        fav_path = os.path.join(FAVORITES_DIR, fav_filename)
-    shutil.copy2(src_path, fav_path)
-    return fav_filename, fav_path
-
-
-def delete_favorite(filename):
-    safe_name = os.path.basename(filename or "")
-    if not safe_name or safe_name != filename:
-        return False
-    path = os.path.join(FAVORITES_DIR, safe_name)
-    if os.path.isfile(path):
-        os.remove(path)
-        return True
-    return False
+__all__ = [
+    # 常量
+    "IMAGE_EXTENSIONS",
+    "WALLPAPER_STYLES",
+    # Windows
+    "get_current_windows_wallpaper",
+    "set_wallpaper_style",
+    "set_wallpaper_windows",
+    # 下载
+    "build_source_url",
+    "download_wallpaper",
+    "fetch_source_image",
+    "fetch_with_retry",
+    # 缓存
+    "clear_cache",
+    "format_bytes",
+    "get_cache_info",
+    # 收藏
+    "delete_favorite",
+    "list_favorites",
+    "safe_name",
+    "save_favorite",
+]

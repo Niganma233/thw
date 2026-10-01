@@ -6,20 +6,18 @@
 
 Tk 初始化失败时（无显示环境）自动跳过，不会让整套测试失败。
 """
-import os
 import unittest
 from pathlib import Path
 
 from PIL import Image
 
+import wallpaper_service
 from tests.helpers import (
     IsolatedDataDir,
     collect_widgets,
-    config,
     default_cfg,
     make_bare_app,
     tk_root,
-    wallpaper_service,
 )
 
 

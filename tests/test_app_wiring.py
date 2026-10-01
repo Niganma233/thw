@@ -11,7 +11,8 @@ import time
 import unittest
 import unittest.mock as mock
 
-from tests.helpers import IsolatedDataDir, config, tk_root, wallpaper_service
+import wallpaper_service
+from tests.helpers import IsolatedDataDir, config, tk_root
 
 
 class AppWiringTest(unittest.TestCase):
@@ -93,9 +94,6 @@ class AppWiringTest(unittest.TestCase):
     def test_apply_settings_wires_both_views_into_cfg(self):
         # 顺带验证 settings_view.collect() / favorite_view.collect() 返回的键
         # 与 cfg 键位对得上——apply_settings 是把它们直接 update 进 cfg 的。
-        from settings_view import SettingsView
-        from favorite_view import FavoriteView
-
         with IsolatedDataDir(), tk_root() as root:
             app, _ = self._construct(root)
             known_keys = set(config.DEFAULT_CONFIG)

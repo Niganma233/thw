@@ -3,16 +3,19 @@
 隔离是必须的，原因有两条：
 
 1. ``config`` 在**导入时**就计算并创建 ``%APPDATA%\\TouhouWallpaper``；
-2. ``wallpaper_service`` 用 ``from config import CACHE_DIR, FAVORITES_DIR``
-   把路径**按值**绑定进了自己的模块命名空间。
+2. ``services.cache`` / ``services.favorites`` 用
+   ``from config import CACHE_DIR / FAVORITES_DIR`` 把路径**按值**绑定进了
+   自己的模块命名空间。
 
-所以只改 ``config`` 上的常量不够，必须同时改 ``wallpaper_service`` 上那份副本，
+所以只改 ``config`` 上的常量不够，必须同时改这两个模块里那份副本，
 否则测试会动到用户真实的收藏与缓存。
 """
 from __future__ import annotations
 
 import contextlib
 import copy
+import email.message
+import io
 import shutil
 import sys
 import unittest
@@ -30,7 +33,8 @@ if str(PROJECT_ROOT) not in sys.path:
 TEST_ROOT = PROJECT_ROOT / ".test-tmp"
 
 import config  # noqa: E402
-import wallpaper_service  # noqa: E402
+import services.cache  # noqa: E402
+import services.favorites  # noqa: E402
 
 # 需要在测试期间被重定向的模块级路径常量：(模块, 属性名)
 _PATH_TARGETS = (
@@ -38,8 +42,8 @@ _PATH_TARGETS = (
     (config, "FAVORITES_DIR"),
     (config, "CACHE_DIR"),
     (config, "CONFIG_FILE"),
-    (wallpaper_service, "CACHE_DIR"),
-    (wallpaper_service, "FAVORITES_DIR"),
+    (services.cache, "CACHE_DIR"),
+    (services.favorites, "FAVORITES_DIR"),
 )
 
 
@@ -173,3 +177,44 @@ def collect_widgets(widget, widget_type):
             found.append(child)
         found.extend(collect_widgets(child, widget_type))
     return found
+
+
+# ---------- 图片与 HTTP 测试替身 ----------
+
+def png_bytes(size=(8, 8), color="red"):
+    from PIL import Image
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def jpeg_bytes(size=(8, 8)):
+    from PIL import Image
+    buffer = io.BytesIO()
+    Image.new("RGB", size, "blue").save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+def webp_bytes(size=(8, 8)):
+    from PIL import Image
+    buffer = io.BytesIO()
+    Image.new("RGB", size, "green").save(buffer, format="WEBP")
+    return buffer.getvalue()
+
+
+class FakeResponse:
+    """模拟 urlopen 返回的上下文管理器（带 Content-Type 头）。"""
+
+    def __init__(self, data, content_type="image/png"):
+        self._data = data
+        self.headers = email.message.Message()
+        self.headers["Content-Type"] = content_type
+
+    def read(self):
+        return self._data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
