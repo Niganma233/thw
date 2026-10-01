@@ -142,17 +142,22 @@ def make_bare_app(cfg=None, mode="online"):
 
     ``object.__new__`` 拿到的是真正的 WallpaperApp 实例，因此类方法照常绑定；
     只是绕开了下载线程、托盘图标、全局热键与 Tk 窗口这些副作用。
+
+    计时状态现在由 ``app.scheduler`` 持有，这里给它一个真实的 RefreshScheduler。
     """
     import gui
+    from core.scheduler import RefreshScheduler, resolve_favorite_behavior
 
     app = object.__new__(gui.WallpaperApp)
     app.cfg = default_cfg() if cfg is None else cfg
-    app.mode = mode
+    app.scheduler = RefreshScheduler(
+        interval_minutes=app.cfg.get("interval_minutes", 30),
+        favorite_behavior=resolve_favorite_behavior(app.cfg),
+        mode=mode,
+    )
     app.is_downloading = False
-    app._consecutive_failures = 0
-    app._next_refresh_time = 0.0
-    app._closing = False
     app.current_applied_wallpaper = ""
+    app._closing = False
     app.countdown_var = FakeVar()
     app.next_btn = FakeWidget()
     app.status_log = []

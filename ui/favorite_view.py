@@ -7,6 +7,7 @@ from PIL import Image
 
 import config
 import wallpaper_service
+from core.scheduler import resolve_favorite_behavior
 from ui.fixed_combobox import FixedHeightComboBox
 from ui.widgets import make_card, open_folder
 
@@ -71,11 +72,8 @@ class FavoriteView:
         self.preview_label.pack(fill=tk.BOTH, expand=True)
 
     def _normalized_behavior(self):
-        behavior = self.cfg.get("favorite_behavior")
-        if behavior in {"pause", "carousel", "online"}:
-            return behavior
-        # 兼容旧版的 favorite_carousel 配置
-        return "carousel" if self.cfg.get("favorite_carousel", False) else "online"
+        # 与 WallpaperApp 共用同一份映射，避免两处各自演化的旧配置兼容逻辑
+        return resolve_favorite_behavior(self.cfg)
 
     def _mark_dirty(self):
         behavior = self.favorite_behavior_var.get()

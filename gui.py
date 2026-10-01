@@ -1,7 +1,6 @@
 import os
 import queue
 import tempfile
-import threading
 import time
 import tkinter as tk
 from tkinter import messagebox
@@ -18,6 +17,18 @@ except ImportError:
 
 import config
 import wallpaper_service
+from core.scheduler import (
+    ACTION_CYCLE_FAVORITE,
+    ACTION_FETCH,
+    BEHAVIOR_CAROUSEL,
+    BEHAVIOR_PAUSE,
+    BEHAVIORS,
+    MODE_FAVORITE,
+    MODE_ONLINE,
+    RefreshScheduler,
+    resolve_favorite_behavior,
+)
+from services.wallpaper_worker import EVENT_ERROR, EVENT_SUCCESS, WallpaperDownloadWorker
 from source_manager import SourceManager
 from ui import theme
 from ui.favorite_view import FavoriteView
@@ -28,7 +39,12 @@ from ui.widgets import open_folder
 
 
 class WallpaperApp:
-    """主窗口编排层：只负责生命周期、下载调度、托盘与视图之间的协调。"""
+    """主窗口编排层：只负责生命周期、下载调度、托盘与视图之间的协调。
+
+    "什么时候换"在 core.scheduler.RefreshScheduler，
+    "怎么换"在 services.wallpaper_worker.WallpaperDownloadWorker，
+    这里只负责把它们和界面接起来。
+    """
 
     def __init__(self, root, silent=False):
         self.root = root
@@ -39,12 +55,15 @@ class WallpaperApp:
 
         self.cfg = config.load_config()
         self.source_manager = SourceManager(self.cfg)
-        self.mode = "online"
+        self.scheduler = RefreshScheduler(
+            interval_minutes=self.cfg.get("interval_minutes", 30),
+            favorite_behavior=resolve_favorite_behavior(self.cfg),
+        )
+        self.scheduler.reset(time.time())
         self.current_applied_wallpaper = ""
         self.is_downloading = False
-        self._consecutive_failures = 0
-        self._next_refresh_time = time.time() + max(0, int(self.cfg.get("interval_minutes", 30))) * 60
         self._ui_queue = queue.Queue()
+        self.downloader = WallpaperDownloadWorker(self._ui_queue)
         self._closing = False
         self.tray_icon = None
 
@@ -111,14 +130,29 @@ class WallpaperApp:
         ctk.CTkButton(footer, text="保存设置", width=120, height=34, command=self.apply_settings).pack(side=tk.RIGHT, padx=(8, 0))
         ctk.CTkButton(footer, text="退出并还原壁纸", width=140, height=34, fg_color="#b44", hover_color="#933", command=self.quit_and_restore).pack(side=tk.RIGHT)
 
+    # ---------- 模式 ----------
+    @property
+    def mode(self):
+        """当前是在线轮播还是收藏模式。
+
+        mode 由调度器持有，这里只做转发：视图会写 ``app.mode = "favorite"``，
+        如果两边各存一份就会各改一半，正是"星标轮播计时"反复出问题的根源。
+        """
+        return self.scheduler.mode
+
+    @mode.setter
+    def mode(self, value):
+        self.scheduler.mode = value
+
     # ---------- 视图回调 ----------
     def on_favorite_behavior_changed(self, behavior):
         """收藏行为设置改变后立即更新当前模式的计时策略。"""
-        if behavior not in {"pause", "carousel", "online"}:
-            behavior = "pause"
+        if behavior not in BEHAVIORS:
+            behavior = BEHAVIOR_PAUSE
+        self.scheduler.favorite_behavior = behavior
         self.cfg["favorite_behavior"] = behavior
-        self.cfg["favorite_carousel"] = behavior == "carousel"
-        if self.mode == "favorite":
+        self.cfg["favorite_carousel"] = behavior == BEHAVIOR_CAROUSEL
+        if self.mode == MODE_FAVORITE:
             self.reset_refresh_timer()
         self._update_countdown()
 
@@ -191,108 +225,74 @@ class WallpaperApp:
     def fetch_and_set_wallpaper(self):
         if self.is_downloading or self._closing:
             return
-        self.is_downloading = True
-        self.next_btn.configure(state="disabled", text="⏳  正在换图…")
-        self.set_status("正在下载新壁纸…", "busy")
         preferred = self._selected_source()
         candidates = self.source_manager.enabled_candidates(preferred.get("id") if preferred else None)
         if not candidates:
             self._download_result(False, "没有启用的图源")
             return
-
-        def task():
-            errors = []
-            for source in candidates:
-                try:
-                    path = wallpaper_service.download_wallpaper(source)
-                    if not wallpaper_service.set_wallpaper_windows(path):
-                        raise RuntimeError("Windows 没有成功应用壁纸")
-                    self._ui_queue.put(("success", path, source["id"], source["name"]))
-                    return
-                except Exception as exc:
-                    errors.append(f"{source['name']}: {exc}")
-            self._ui_queue.put(("error", "\n".join(errors[:3])))
-
-        threading.Thread(target=task, name="wallpaper-download", daemon=True).start()
+        self.is_downloading = True
+        self.next_btn.configure(state="disabled", text="⏳  正在换图…")
+        self.set_status("正在下载新壁纸…", "busy")
+        # 回退循环与线程都在 worker 里；这里只等队列事件。
+        self.downloader.start(candidates)
 
     def _download_result(self, success, payload, source_id=None, source_name=None):
         self.is_downloading = False
         self.next_btn.configure(state="normal", text="🎲  换一张")
         if success:
             self.current_applied_wallpaper = payload
-            self.mode = "online"
-            self._consecutive_failures = 0
-            self.reset_refresh_timer()
+            self.mode = MODE_ONLINE
+            self.scheduler.on_success(time.time())
             self.set_status(f"在线壁纸已更新 · {source_name or ''} · {time.strftime('%H:%M:%S')}", "ready")
             if source_id and source_id != self.cfg.get("source_id"):
                 # 失败回退到其他图源后，记录最终成功图源，后续优先使用它。
                 self.cfg["source_id"] = source_id
                 config.save_config(self.cfg)
             return
-        self._consecutive_failures += 1
-        self._schedule_failure_backoff(reset=False)
+        self.scheduler.on_failure(time.time())
         self.set_status(f"换图失败：{payload}", "error")
 
     # ---------- 定时 ----------
-    def _favorite_behavior(self):
-        behavior = self.cfg.get("favorite_behavior")
-        if behavior in {"pause", "carousel", "online"}:
-            return behavior
-        # 兼容旧版配置
-        return "carousel" if self.cfg.get("favorite_carousel", False) else "online"
+    def _sync_scheduler_config(self):
+        """把配置里会影响计时的项同步给调度器。"""
+        self.scheduler.interval_minutes = self.cfg.get("interval_minutes", 30)
+        self.scheduler.favorite_behavior = resolve_favorite_behavior(self.cfg)
 
     def reset_refresh_timer(self):
-        # 收藏模式下选择“暂停自动刷新”时，使用无穷远时间戳。
-        if self.mode == "favorite" and self._favorite_behavior() == "pause":
-            self._next_refresh_time = float("inf")
-            return
-        interval = max(0, int(self.cfg.get("interval_minutes", 30)))
-        self._next_refresh_time = time.time() + interval * 60 if interval > 0 else float("inf")
-
-    def _schedule_failure_backoff(self, reset=True):
-        if reset:
-            self._consecutive_failures = 0
-        base = max(60, int(self.cfg.get("interval_minutes", 30)) * 60)
-        wait = min(30 * (2 ** max(0, self._consecutive_failures - 1)), base)
-        self._next_refresh_time = time.time() + wait
+        self._sync_scheduler_config()
+        self.scheduler.reset(time.time())
 
     def _update_countdown(self):
-        if self.is_downloading:
-            self.countdown_var.set("正在获取下一张壁纸…")
-            return
-        if self.mode == "favorite" and self._favorite_behavior() == "pause":
-            self.countdown_var.set("收藏模式：已暂停自动刷新")
-            return
-        interval = int(self.cfg.get("interval_minutes", 30))
-        if interval <= 0:
-            self.countdown_var.set("自动刷新：已关闭")
-            return
-        remain = max(0, int(self._next_refresh_time - time.time()))
-        self.countdown_var.set(f"下次刷新：{remain // 60:02d}:{remain % 60:02d}")
+        self.countdown_var.set(
+            self.scheduler.countdown_text(time.time(), downloading=self.is_downloading)
+        )
 
     def timer_loop(self):
         if self._closing:
             return
+        self._drain_download_events()
+        if not self.is_downloading and self.scheduler.is_due(time.time()):
+            action = self.scheduler.next_action()
+            if action == ACTION_CYCLE_FAVORITE:
+                self._cycle_favorite()
+            elif action == ACTION_FETCH:
+                self.fetch_and_set_wallpaper()
+            else:
+                self.scheduler.suspend()
+        self._update_countdown()
+        self.root.after(1000, self.timer_loop)
+
+    def _drain_download_events(self):
+        """把后台下载线程放进队列的结果取出来应用。"""
         while True:
             try:
                 event = self._ui_queue.get_nowait()
             except queue.Empty:
-                break
-            if event[0] == "success":
+                return
+            if event[0] == EVENT_SUCCESS:
                 self._download_result(True, event[1], event[2], event[3])
-            elif event[0] == "error":
+            elif event[0] == EVENT_ERROR:
                 self._download_result(False, event[1])
-
-        if not self.is_downloading and time.time() >= self._next_refresh_time:
-            behavior = self._favorite_behavior()
-            if self.mode == "favorite" and behavior == "pause":
-                self._next_refresh_time = float("inf")
-            elif self.mode == "favorite" and behavior == "carousel":
-                self._cycle_favorite()
-            else:
-                self.fetch_and_set_wallpaper()
-        self._update_countdown()
-        self.root.after(1000, self.timer_loop)
 
     def _cycle_favorite(self):
         files = wallpaper_service.list_favorites()

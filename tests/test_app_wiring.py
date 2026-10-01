@@ -88,7 +88,7 @@ class AppWiringTest(unittest.TestCase):
     def test_initial_deadline_follows_interval(self):
         with IsolatedDataDir(), tk_root() as root:
             app, _ = self._construct(root, prefs={"interval_minutes": 45})
-            remaining = app._next_refresh_time - time.time()
+            remaining = app.scheduler.next_refresh_time - time.time()
             self.assertGreater(remaining, 44 * 60)
             self.assertLessEqual(remaining, 45 * 60)
 
