@@ -243,3 +243,45 @@ class FakeResponse:
 
     def __exit__(self, *exc_info):
         return False
+
+
+# ---------- 托盘 / 全局热键的测试替身 ----------
+
+class FakeTrayIcon:
+    """替代 ``pystray.Icon``：真的建图标会往系统托盘里塞常驻图标，
+    并且 run_detached 会起一个后台消息循环。
+    """
+
+    instances = []
+
+    def __init__(self, name, image, title, menu, **kwargs):
+        self.name = name
+        self.image = image
+        self.title = title
+        self.menu = menu
+        self.detached = False
+        self.stopped = False
+        FakeTrayIcon.instances.append(self)
+
+    def run_detached(self, *args, **kwargs):
+        self.detached = True
+
+    def stop(self):
+        self.stopped = True
+
+
+class FakeKeyboard:
+    """替代 ``keyboard`` 模块：真的调用 add_hotkey 会在测试进程里挂上系统级热键。"""
+
+    def __init__(self):
+        self.added = []
+        self.unhook_count = 0
+        self.fail_on = None
+
+    def add_hotkey(self, text, callback):
+        if text == self.fail_on:
+            raise ValueError("无效的快捷键")
+        self.added.append((text, callback))
+
+    def unhook_all_hotkeys(self):
+        self.unhook_count += 1

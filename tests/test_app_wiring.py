@@ -12,7 +12,7 @@ import unittest
 import unittest.mock as mock
 
 import wallpaper_service
-from tests.helpers import IsolatedDataDir, config, tk_root
+from tests.helpers import FakeKeyboard, FakeTrayIcon, IsolatedDataDir, config, tk_root
 
 
 class AppWiringTest(unittest.TestCase):
@@ -111,6 +111,63 @@ class AppWiringTest(unittest.TestCase):
         save.assert_called_once()
         registry.assert_called_once()
         style.assert_called_once()
+
+
+class ExternalIntegrationWiringTest(unittest.TestCase):
+    """托盘与全局热键的真实接线。
+
+    上面那组用例把 init_tray_icon / register_hotkeys 打桩掉了，只验证"被调用了"；
+    这里换成替身库、让这两个方法真的跑，从而验证菜单标签、默认项与快捷键文本
+    确实来自配置。
+    """
+
+    def _construct(self, root, prefs=None):
+        import gui
+
+        if prefs:
+            with open(config.CONFIG_FILE, "w", encoding="utf-8") as handle:
+                json.dump(prefs, handle, ensure_ascii=False)
+
+        FakeTrayIcon.instances = []
+        keyboard = FakeKeyboard()
+        with mock.patch("ui.tray.pystray.Icon", FakeTrayIcon), \
+                mock.patch("ui.hotkeys.keyboard", keyboard), \
+                mock.patch.object(wallpaper_service, "get_current_windows_wallpaper", return_value=""), \
+                mock.patch.object(gui.WallpaperApp, "timer_loop"), \
+                mock.patch.object(gui.WallpaperApp, "fetch_and_set_wallpaper"), \
+                mock.patch.object(gui.WallpaperApp, "_warn_if_data_dir_readonly"), \
+                mock.patch.object(config, "save_config"):
+            app = gui.WallpaperApp(root)
+        return app, keyboard
+
+    def test_tray_menu_labels_and_default_item(self):
+        with IsolatedDataDir(), tk_root() as root:
+            self._construct(root)
+        menu = FakeTrayIcon.instances[0].menu
+        self.assertEqual(
+            [entry.text for entry in menu],
+            ["打开设置界面", "🎲 换一张在线壁纸", "⭐ 收藏当前壁纸", "❌ 退出并还原壁纸"],
+        )
+        self.assertTrue(menu[0].default, "第一项应当是默认项（点托盘图标触发）")
+        self.assertFalse(any(entry.default for entry in menu[1:]))
+
+    def test_tray_icon_is_detached(self):
+        with IsolatedDataDir(), tk_root() as root:
+            app, _ = self._construct(root)
+        self.assertTrue(FakeTrayIcon.instances[0].detached)
+        self.assertTrue(app.tray.running)
+
+    def test_hotkeys_come_from_config(self):
+        prefs = {"hotkey_favorite": "ctrl+shift+f", "hotkey_switch": "  ctrl+shift+s  "}
+        with IsolatedDataDir(), tk_root() as root:
+            _, keyboard = self._construct(root, prefs=prefs)
+        # 空格由 HotkeyManager 负责去掉
+        self.assertEqual([text for text, _ in keyboard.added], ["ctrl+shift+f", "ctrl+shift+s"])
+
+    def test_blank_hotkeys_register_nothing(self):
+        with IsolatedDataDir(), tk_root() as root:
+            _, keyboard = self._construct(root, prefs={"hotkey_favorite": "", "hotkey_switch": ""})
+        self.assertEqual(keyboard.added, [])
 
 
 if __name__ == "__main__":

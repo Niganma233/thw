@@ -6,14 +6,6 @@ import tkinter as tk
 from tkinter import messagebox
 
 import customtkinter as ctk
-from PIL import Image, ImageDraw
-import pystray
-from pystray import MenuItem as item
-
-try:
-    import keyboard
-except ImportError:
-    keyboard = None
 
 import config
 import wallpaper_service
@@ -31,10 +23,13 @@ from core.scheduler import (
 from services.wallpaper_worker import EVENT_ERROR, EVENT_SUCCESS, WallpaperDownloadWorker
 from source_manager import SourceManager
 from ui import theme
+from ui.dialogs import ask_wallpaper_name, show_data_dir_unwritable
 from ui.favorite_view import FavoriteView
+from ui.hotkeys import HotkeyManager
 from ui.settings_view import SettingsView
 from ui.source_manager_view import SourceManagerView
 from ui.status_bar import StatusPresenter
+from ui.tray import TrayController
 from ui.widgets import open_folder
 
 
@@ -65,7 +60,9 @@ class WallpaperApp:
         self._ui_queue = queue.Queue()
         self.downloader = WallpaperDownloadWorker(self._ui_queue)
         self._closing = False
-        self.tray_icon = None
+        self.tray = TrayController(self.root)
+        # on_error 只在真正注册快捷键时才会被调用，那时状态栏已经建好了
+        self.hotkeys = HotkeyManager(self.root, on_error=lambda text: self.set_status(text, "error"))
 
         self._backup_original_wallpaper()
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
@@ -180,12 +177,7 @@ class WallpaperApp:
         except OSError as exc:
             self.set_status(f"数据目录不可写：{exc}", "error")
             if show_dialog:
-                messagebox.showwarning(
-                    "数据目录不可写",
-                    f"无法写入：\n{config.APP_DIR}\n\n收藏、缓存和设置都无法保存。\n"
-                    "请检查该目录的写入权限（安全软件拦截、以受限权限运行、程序被限制在工作区里都可能造成）。",
-                    parent=self.root,
-                )
+                show_data_dir_unwritable(self.root, config.APP_DIR)
 
     # ---------- 收藏 ----------
     def favorite_current_wallpaper(self):
@@ -196,13 +188,9 @@ class WallpaperApp:
         if os.path.dirname(os.path.abspath(path)) == os.path.abspath(config.FAVORITES_DIR):
             messagebox.showinfo("提示", "这张壁纸已经在收藏夹中了。", parent=self.root)
             return
-        dialog = ctk.CTkInputDialog(text="给这张壁纸取一个名字：", title="⭐ 收藏壁纸")
-        default_name = f"fav_{time.strftime('%Y%m%d_%H%M%S')}"
-        dialog.after(80, lambda: dialog._entry.insert(0, default_name))
-        name = dialog.get_input()
+        name = ask_wallpaper_name(f"fav_{time.strftime('%Y%m%d_%H%M%S')}")
         if name is None:
             return
-        name = name.strip() or default_name
         try:
             filename, fav_path = wallpaper_service.save_favorite(path, name)
             wallpaper_service.set_wallpaper_windows(fav_path)
@@ -306,42 +294,18 @@ class WallpaperApp:
 
     # ---------- 热键 / 托盘 ----------
     def register_hotkeys(self):
-        if keyboard is None:
-            return
-        try:
-            keyboard.unhook_all_hotkeys()
-        except Exception:
-            pass
-        pairs = [
-            (self.cfg.get("hotkey_favorite", "").strip(), self.favorite_current_wallpaper, "收藏"),
-            (self.cfg.get("hotkey_switch", "").strip(), self.fetch_and_set_wallpaper, "切换"),
-        ]
-        for hotkey_text, callback, label in pairs:
-            if not hotkey_text:
-                continue
-            try:
-                keyboard.add_hotkey(hotkey_text, lambda cb=callback: self.root.after(0, cb))
-            except Exception as exc:
-                self.set_status(f"{label}快捷键无效：{exc}", "error")
+        self.hotkeys.register([
+            (self.cfg.get("hotkey_favorite", ""), self.favorite_current_wallpaper, "收藏"),
+            (self.cfg.get("hotkey_switch", ""), self.fetch_and_set_wallpaper, "切换"),
+        ])
 
     def init_tray_icon(self):
-        menu = (
-            item("打开设置界面", lambda: self.root.after(0, self._restore_ui), default=True),
-            item("🎲 换一张在线壁纸", lambda: self.root.after(0, self.fetch_and_set_wallpaper)),
-            item("⭐ 收藏当前壁纸", lambda: self.root.after(0, self.favorite_current_wallpaper)),
-            item("❌ 退出并还原壁纸", lambda: self.root.after(0, self.quit_and_restore)),
-        )
-        self.tray_icon = pystray.Icon("TouhouWallpaper", self._create_tray_icon_image(), "Touhou Wallpaper", menu)
-        self.tray_icon.run_detached()
-
-    @staticmethod
-    def _create_tray_icon_image():
-        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        dc = ImageDraw.Draw(image)
-        dc.ellipse([4, 4, 60, 60], fill="#3b82f6", outline="#2563eb", width=2)
-        dc.polygon([(16, 44), (28, 22), (40, 44)], fill="white")
-        dc.polygon([(34, 44), (44, 30), (52, 44)], fill="white")
-        return image
+        self.tray.start([
+            ("打开设置界面", self._restore_ui),
+            ("🎲 换一张在线壁纸", self.fetch_and_set_wallpaper),
+            ("⭐ 收藏当前壁纸", self.favorite_current_wallpaper),
+            ("❌ 退出并还原壁纸", self.quit_and_restore),
+        ])
 
     def _restore_ui(self):
         self.favorite_view.refresh()
@@ -390,16 +354,8 @@ class WallpaperApp:
             return
         self._closing = True
         try:
-            if self.tray_icon:
-                try:
-                    self.tray_icon.stop()
-                except Exception:
-                    pass
-            if keyboard is not None:
-                try:
-                    keyboard.unhook_all_hotkeys()
-                except Exception:
-                    pass
+            self.tray.stop()
+            self.hotkeys.unregister()
             path = self.cfg.get("original_wallpaper", "")
             if path and os.path.isfile(path):
                 wallpaper_service.set_wallpaper_windows(path)
