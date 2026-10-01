@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import messagebox
 import customtkinter as ctk
 
-import wallpaper_service
+from services import cache
 from ui.widgets import make_card
 
 
@@ -12,7 +12,7 @@ class SettingsView:
         self.parent = parent
         self.app = app
         self.interval_map = {"不自动更换": 0, "每 5 分钟": 5, "每 15 分钟": 15, "每 30 分钟": 30, "每 1 小时": 60, "每 2 小时": 120, "每 4 小时": 240}
-        # 键必须与 wallpaper_service.WALLPAPER_STYLES 完全一致；
+        # 键必须与 core.constants.WALLPAPER_STYLES 完全一致；
         # tests/test_ui_smoke.py 的 test_style_keys_match_service 会守住这一点。
         self.style_map = {"fill": "填充：铺满并裁剪", "fit": "适应：完整显示", "center": "居中", "stretch": "拉伸"}
         self._build()
@@ -66,32 +66,32 @@ class SettingsView:
         ctk.CTkEntry(row1, textvariable=self.hotkey_switch, placeholder_text="例如 ctrl+shift+f").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
 
     def refresh_cache_info(self):
-        count, total = wallpaper_service.get_cache_info()
-        self.cache_info_var.set(f"缓存：{count} 张图片 · {wallpaper_service.format_bytes(total)}")
+        count, total = cache.get_cache_info()
+        self.cache_info_var.set(f"缓存：{count} 张图片 · {cache.format_bytes(total)}")
 
     def clear_cache(self):
-        count, total = wallpaper_service.get_cache_info()
+        count, total = cache.get_cache_info()
         if count == 0:
             messagebox.showinfo("缓存清理", "当前没有可清理的缓存图片。", parent=self.parent)
             return
         if not messagebox.askyesno(
             "清理缓存",
-            f"确定清理缓存中的 {count} 张图片（约 {wallpaper_service.format_bytes(total)}）吗？\n\n当前正在使用的壁纸会保留。",
+            f"确定清理缓存中的 {count} 张图片（约 {cache.format_bytes(total)}）吗？\n\n当前正在使用的壁纸会保留。",
             parent=self.parent,
         ):
             return
-        deleted, freed, failed = wallpaper_service.clear_cache(getattr(self.app, "current_applied_wallpaper", None))
+        deleted, freed, failed = cache.clear_cache(getattr(self.app, "current_applied_wallpaper", None))
         self.refresh_cache_info()
         if failed:
             messagebox.showwarning(
                 "缓存清理完成",
-                f"已清理 {deleted} 张图片，释放约 {wallpaper_service.format_bytes(freed)}。\n{failed} 个文件无法删除（可能正在被其他程序使用）。",
+                f"已清理 {deleted} 张图片，释放约 {cache.format_bytes(freed)}。\n{failed} 个文件无法删除（可能正在被其他程序使用）。",
                 parent=self.parent,
             )
         else:
             messagebox.showinfo(
                 "缓存清理完成",
-                f"已清理 {deleted} 张图片，释放约 {wallpaper_service.format_bytes(freed)}。",
+                f"已清理 {deleted} 张图片，释放约 {cache.format_bytes(freed)}。",
                 parent=self.parent,
             )
 

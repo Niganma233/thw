@@ -11,27 +11,28 @@ import time
 import unittest
 import unittest.mock as mock
 
-import wallpaper_service
-from tests.helpers import FakeKeyboard, FakeTrayIcon, IsolatedDataDir, config, tk_root
+from core import config_store, paths
+from services import autostart, wallpaper_win
+from tests.helpers import FakeKeyboard, FakeTrayIcon, IsolatedDataDir, tk_root
 
 
 class AppWiringTest(unittest.TestCase):
     def _construct(self, root, prefs=None):
         """在打桩环境下构造 WallpaperApp，返回 (app, 打桩记录)。"""
-        import gui
+        import app as app_module
 
         if prefs:
-            with open(config.CONFIG_FILE, "w", encoding="utf-8") as handle:
+            with open(paths.CONFIG_FILE, "w", encoding="utf-8") as handle:
                 json.dump(prefs, handle, ensure_ascii=False)
 
-        with mock.patch.object(wallpaper_service, "get_current_windows_wallpaper", return_value=""), \
-                mock.patch.object(gui.WallpaperApp, "init_tray_icon") as tray, \
-                mock.patch.object(gui.WallpaperApp, "register_hotkeys") as hotkeys, \
-                mock.patch.object(gui.WallpaperApp, "timer_loop") as timer, \
-                mock.patch.object(gui.WallpaperApp, "fetch_and_set_wallpaper") as fetch, \
-                mock.patch.object(gui.WallpaperApp, "_warn_if_data_dir_readonly"), \
-                mock.patch.object(config, "save_config"):
-            app = gui.WallpaperApp(root)
+        with mock.patch.object(wallpaper_win, "get_current_windows_wallpaper", return_value=""), \
+                mock.patch.object(app_module.WallpaperApp, "init_tray_icon") as tray, \
+                mock.patch.object(app_module.WallpaperApp, "register_hotkeys") as hotkeys, \
+                mock.patch.object(app_module.WallpaperApp, "timer_loop") as timer, \
+                mock.patch.object(app_module.WallpaperApp, "fetch_and_set_wallpaper") as fetch, \
+                mock.patch.object(app_module.WallpaperApp, "_warn_if_data_dir_readonly"), \
+                mock.patch.object(config_store, "save_config"):
+            app = app_module.WallpaperApp(root)
         return app, {"tray": tray, "hotkeys": hotkeys, "timer": timer, "fetch": fetch}
 
     def test_all_views_are_constructed(self):
@@ -97,13 +98,13 @@ class AppWiringTest(unittest.TestCase):
         # 与 cfg 键位对得上——apply_settings 是把它们直接 update 进 cfg 的。
         with IsolatedDataDir(), tk_root() as root:
             app, _ = self._construct(root)
-            known_keys = set(config.DEFAULT_CONFIG)
+            known_keys = set(config_store.DEFAULT_CONFIG)
             self.assertTrue(set(app.settings_view.collect()) <= known_keys)
             self.assertTrue(set(app.favorite_view.collect()) <= known_keys)
 
-            with mock.patch.object(config, "save_config") as save, \
-                    mock.patch.object(config, "set_auto_start_registry") as registry, \
-                    mock.patch.object(wallpaper_service, "set_wallpaper_style") as style, \
+            with mock.patch.object(config_store, "save_config") as save, \
+                    mock.patch.object(autostart, "set_auto_start_registry") as registry, \
+                    mock.patch.object(wallpaper_win, "set_wallpaper_style") as style, \
                     mock.patch.object(type(app), "register_hotkeys"), \
                     mock.patch("tkinter.messagebox.showinfo"):
                 self.assertTrue(app.apply_settings())
@@ -122,22 +123,22 @@ class ExternalIntegrationWiringTest(unittest.TestCase):
     """
 
     def _construct(self, root, prefs=None):
-        import gui
+        import app as app_module
 
         if prefs:
-            with open(config.CONFIG_FILE, "w", encoding="utf-8") as handle:
+            with open(paths.CONFIG_FILE, "w", encoding="utf-8") as handle:
                 json.dump(prefs, handle, ensure_ascii=False)
 
         FakeTrayIcon.instances = []
         keyboard = FakeKeyboard()
         with mock.patch("ui.tray.pystray.Icon", FakeTrayIcon), \
                 mock.patch("ui.hotkeys.keyboard", keyboard), \
-                mock.patch.object(wallpaper_service, "get_current_windows_wallpaper", return_value=""), \
-                mock.patch.object(gui.WallpaperApp, "timer_loop"), \
-                mock.patch.object(gui.WallpaperApp, "fetch_and_set_wallpaper"), \
-                mock.patch.object(gui.WallpaperApp, "_warn_if_data_dir_readonly"), \
-                mock.patch.object(config, "save_config"):
-            app = gui.WallpaperApp(root)
+                mock.patch.object(wallpaper_win, "get_current_windows_wallpaper", return_value=""), \
+                mock.patch.object(app_module.WallpaperApp, "timer_loop"), \
+                mock.patch.object(app_module.WallpaperApp, "fetch_and_set_wallpaper"), \
+                mock.patch.object(app_module.WallpaperApp, "_warn_if_data_dir_readonly"), \
+                mock.patch.object(config_store, "save_config"):
+            app = app_module.WallpaperApp(root)
         return app, keyboard
 
     def test_tray_menu_labels_and_default_item(self):

@@ -3,8 +3,7 @@ import queue
 import tempfile
 import time
 
-import config
-import wallpaper_service
+from core import config_store, paths
 from core.scheduler import (
     ACTION_CYCLE_FAVORITE,
     ACTION_FETCH,
@@ -16,8 +15,11 @@ from core.scheduler import (
     RefreshScheduler,
     resolve_favorite_behavior,
 )
+from services import favorites as favorites_service
+from services import wallpaper_win
+from services import autostart
+from services.sources import SourceManager
 from services.wallpaper_worker import EVENT_ERROR, EVENT_SUCCESS, WallpaperDownloadWorker
-from source_manager import SourceManager
 from ui.dialogs import (
     ask_wallpaper_name,
     show_data_dir_unwritable,
@@ -37,6 +39,9 @@ from ui.widgets import open_folder
 class WallpaperApp:
     """主窗口编排层：只负责生命周期、下载调度、托盘与视图之间的协调。
 
+    本模块**不含任何 tkinter / customtkinter 依赖**（弹窗走 ui.dialogs，
+    控件在 ui.main_window），tests/test_layering.py 会守住这一点。
+
     "什么时候换"在 core.scheduler.RefreshScheduler，
     "怎么换"在 services.wallpaper_worker.WallpaperDownloadWorker，
     这里只负责把它们和界面接起来。
@@ -49,7 +54,7 @@ class WallpaperApp:
         self.root.minsize(940, 840)
         self.root.resizable(True, True)
 
-        self.cfg = config.load_config()
+        self.cfg = config_store.load_config()
         self.source_manager = SourceManager(self.cfg)
         self.scheduler = RefreshScheduler(
             interval_minutes=self.cfg.get("interval_minutes", 30),
@@ -85,17 +90,17 @@ class WallpaperApp:
 
     # ---------- 窗口 ----------
     def _backup_original_wallpaper(self):
-        cur_wp = wallpaper_service.get_current_windows_wallpaper()
-        if cur_wp and not cur_wp.lower().startswith(config.APP_DIR.lower()):
+        cur_wp = wallpaper_win.get_current_windows_wallpaper()
+        if cur_wp and not cur_wp.lower().startswith(paths.APP_DIR.lower()):
             self.cfg["original_wallpaper"] = cur_wp
-            config.save_config(self.cfg)
+            config_store.save_config(self.cfg)
 
     def init_ui(self):
         self.window = MainWindow(
             self.root,
             on_next_wallpaper=self.fetch_and_set_wallpaper,
             on_favorite_current=self.favorite_current_wallpaper,
-            on_open_favorites=lambda: open_folder(config.FAVORITES_DIR),
+            on_open_favorites=lambda: open_folder(paths.FAVORITES_DIR),
             on_hide_to_tray=self.hide_to_tray,
             on_save_settings=self.apply_settings,
             on_quit_and_restore=self.quit_and_restore,
@@ -152,7 +157,7 @@ class WallpaperApp:
         # 图源是由 SourceManagerView 通过共享的 SourceManager 实例就地改的，
         # self.source_manager 始终看得到最新状态，不必重建（重建只会白跑一遍迁移）。
         if save:
-            config.save_config(self.cfg)
+            config_store.save_config(self.cfg)
 
     # ---------- 收藏 ----------
     def apply_favorite_wallpaper(self, path):
@@ -161,7 +166,7 @@ class WallpaperApp:
         这是 FavoriteViewHooks.on_apply 的实现：视图只负责选哪张、以及要不要弹
         "应用失败"，改状态这件事留在 App 里。
         """
-        if not wallpaper_service.set_wallpaper_windows(path):
+        if not wallpaper_win.set_wallpaper_windows(path):
             return False
         self.current_applied_wallpaper = path
         self.mode = MODE_FAVORITE
@@ -187,14 +192,14 @@ class WallpaperApp:
     def _warn_if_data_dir_readonly(self, show_dialog=True):
         """数据目录不可写时立刻提示，否则收藏、缓存、设置都会静默失败。"""
         try:
-            handle, probe = tempfile.mkstemp(prefix="write_test_", dir=config.APP_DIR)
+            handle, probe = tempfile.mkstemp(prefix="write_test_", dir=paths.APP_DIR)
             os.close(handle)
             os.remove(probe)
             return
         except OSError as exc:
             self.set_status(f"数据目录不可写：{exc}", "error")
             if show_dialog:
-                show_data_dir_unwritable(self.root, config.APP_DIR)
+                show_data_dir_unwritable(self.root, paths.APP_DIR)
 
     # ---------- 收藏 ----------
     def favorite_current_wallpaper(self):
@@ -202,15 +207,15 @@ class WallpaperApp:
         if not path or not os.path.isfile(path):
             show_warning(self.root, "提示", "当前没有可收藏的壁纸。")
             return
-        if os.path.dirname(os.path.abspath(path)) == os.path.abspath(config.FAVORITES_DIR):
+        if os.path.dirname(os.path.abspath(path)) == os.path.abspath(paths.FAVORITES_DIR):
             show_info(self.root, "提示", "这张壁纸已经在收藏夹中了。")
             return
         name = ask_wallpaper_name(f"fav_{time.strftime('%Y%m%d_%H%M%S')}")
         if name is None:
             return
         try:
-            filename, fav_path = wallpaper_service.save_favorite(path, name)
-            wallpaper_service.set_wallpaper_windows(fav_path)
+            filename, fav_path = favorites_service.save_favorite(path, name)
+            wallpaper_win.set_wallpaper_windows(fav_path)
             self.current_applied_wallpaper = fav_path
             self.mode = MODE_FAVORITE
             self.reset_refresh_timer()
@@ -251,7 +256,7 @@ class WallpaperApp:
             if source_id and source_id != self.cfg.get("source_id"):
                 # 失败回退到其他图源后，记录最终成功图源，后续优先使用它。
                 self.cfg["source_id"] = source_id
-                config.save_config(self.cfg)
+                config_store.save_config(self.cfg)
             return
         self.scheduler.on_failure(time.time())
         self.set_status(f"换图失败：{payload}", "error")
@@ -339,14 +344,14 @@ class WallpaperApp:
         try:
             self.cfg.update(self.settings_view.collect())
             self.cfg.update(self.favorite_view.collect())
-            config.save_config(self.cfg)
-            config.set_auto_start_registry(self.cfg["auto_start"])
+            config_store.save_config(self.cfg)
+            autostart.set_auto_start_registry(self.cfg["auto_start"])
             self.register_hotkeys()
             # Windows 的 WallpaperStyle 注册表值通常要在重新应用壁纸后才会立即生效。
-            wallpaper_service.set_wallpaper_style(self.cfg["wallpaper_style"])
+            wallpaper_win.set_wallpaper_style(self.cfg["wallpaper_style"])
             current = self.current_applied_wallpaper
             if current and os.path.isfile(current):
-                wallpaper_service.set_wallpaper_windows(current)
+                wallpaper_win.set_wallpaper_windows(current)
         except Exception as exc:
             self.set_status(f"保存设置失败：{exc}", "error")
             if show_msg:
@@ -369,7 +374,7 @@ class WallpaperApp:
             self.hotkeys.unregister()
             path = self.cfg.get("original_wallpaper", "")
             if path and os.path.isfile(path):
-                wallpaper_service.set_wallpaper_windows(path)
+                wallpaper_win.set_wallpaper_windows(path)
             self.root.destroy()
         except Exception as exc:
             # 退出途中出错时把锁恢复，否则"退出/托盘"按钮会永久失效

@@ -92,7 +92,7 @@ class ShowDataDirUnwritableTest(unittest.TestCase):
 
 
 class SimpleDialogWrappersTest(unittest.TestCase):
-    """gui.WallpaperApp 通过这些包装弹窗，因此它自己完全不 import tkinter
+    """app.WallpaperApp 通过这些包装弹窗，因此它自己完全不 import tkinter
     （见 tests/test_layering.py）。这里确认包装没有改变参数顺序或丢掉 parent。
     """
 

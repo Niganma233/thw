@@ -1,8 +1,8 @@
-"""source_manager 的迁移、排序、候选回退与参数校验。"""
+"""services.sources 的迁移、排序、候选回退与参数校验。"""
 import unittest
 
 from tests.helpers import default_cfg
-from source_manager import BUILTIN_SOURCES, SourceManager, validate_source_url
+from services.sources import BUILTIN_SOURCES, SourceManager, validate_source_url
 
 
 class ValidateSourceUrlTest(unittest.TestCase):

@@ -12,7 +12,8 @@ from pathlib import Path
 
 from PIL import Image
 
-import wallpaper_service
+from core.constants import WALLPAPER_STYLES
+
 from tests.helpers import (
     IsolatedDataDir,
     collect_widgets,
@@ -85,11 +86,11 @@ class SettingsViewSmokeTest(unittest.TestCase):
         self.assertIn("1 张图片", view.cache_info_var.get())
 
     def test_style_keys_match_service(self):
-        # settings_view 的显示标签与 wallpaper_service 的注册表取值必须覆盖同一组
+        # settings_view 的显示标签与 core.constants 的注册表取值必须覆盖同一组
         # 样式键，否则会出现"界面上能选但这个样式设不进去"，或反过来漏掉一个样式。
         with IsolatedDataDir(), tk_root() as root:
             view = self._build(root)
-            self.assertEqual(set(view.style_map), set(wallpaper_service.WALLPAPER_STYLES))
+            self.assertEqual(set(view.style_map), set(WALLPAPER_STYLES))
 
     def test_interval_keys_are_unique(self):
         # interval_map 是 标签->分钟 的映射，反向查找（collect）依赖取值唯一，
@@ -182,7 +183,7 @@ class FavoriteViewSmokeTest(unittest.TestCase):
     def _view(self, root, initial_behavior="pause", **hook_kwargs):
         from ui.favorite_view import FavoriteView
         tab = _ctk().CTkFrame(root)
-        # FavoriteView.__init__ 只建控件；填充列表是 gui.WallpaperApp 之后调用的
+        # FavoriteView.__init__ 只建控件；填充列表是 app.WallpaperApp 之后调用的
         view = FavoriteView(tab, self._hooks(**hook_kwargs), initial_behavior=initial_behavior)
         view.refresh()
         return view
@@ -317,7 +318,7 @@ class SourceManagerViewSmokeTest(unittest.TestCase):
         changes = []
         statuses = []
         tab = _ctk().CTkFrame(root)
-        # 回调契约：gui.WallpaperApp._source_changed(save=False)，所以必须接受
+        # 回调契约：app.WallpaperApp._source_changed(save=False)，所以必须接受
         # save 关键字参数。
         view = SourceManagerView(
             tab, cfg, manager=manager,
@@ -329,7 +330,7 @@ class SourceManagerViewSmokeTest(unittest.TestCase):
     def test_injected_manager_is_reused(self):
         # WallpaperApp 把自己已经持有的 SourceManager 注入进来，避免在同一份 cfg
         # 上重复跑迁移，也避免两个实例各持一份状态。
-        from source_manager import SourceManager
+        from services.sources import SourceManager
         cfg = default_cfg()
         manager = SourceManager(cfg)
         with IsolatedDataDir(), tk_root() as root:
@@ -342,7 +343,7 @@ class SourceManagerViewSmokeTest(unittest.TestCase):
             self.assertIsNotNone(view.manager)
 
     def test_lists_builtins_and_custom_sources(self):
-        from source_manager import BUILTIN_SOURCES
+        from services.sources import BUILTIN_SOURCES
         cfg = default_cfg()
         cfg["sources"] = [{"id": "custom_1", "name": "我的源", "url": "https://e.com/r",
                            "site": "all", "size": "pc", "timeout": 15, "retries": 3,

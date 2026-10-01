@@ -8,7 +8,7 @@ import time
 import unittest
 import unittest.mock as mock
 
-import config
+from core import config_store
 from core.scheduler import ACTION_NONE, BEHAVIOR_CAROUSEL, BEHAVIOR_PAUSE, MODE_FAVORITE
 from tests.helpers import IsolatedDataDir, default_cfg, make_bare_app
 
@@ -32,7 +32,7 @@ class DownloadResultTest(unittest.TestCase):
             app = make_bare_app(default_cfg(interval_minutes=30))
             app.scheduler.consecutive_failures = 3
             with mock.patch("time.time", return_value=NOW), \
-                    mock.patch.object(config, "save_config"):
+                    mock.patch.object(config_store, "save_config"):
                 app._download_result(True, "C:/cache/a.png", "konachan", "Konachan")
         self.assertFalse(app.is_downloading)
         self.assertEqual(app.current_applied_wallpaper, "C:/cache/a.png")
@@ -48,7 +48,7 @@ class DownloadResultTest(unittest.TestCase):
         with IsolatedDataDir():
             app = make_bare_app(default_cfg(interval_minutes=30, source_id="all"))
             with mock.patch("time.time", return_value=NOW), \
-                    mock.patch.object(config, "save_config") as saver:
+                    mock.patch.object(config_store, "save_config") as saver:
                 app._download_result(True, "C:/cache/a.png", "all", "全部")
         saver.assert_not_called()
 
@@ -56,7 +56,7 @@ class DownloadResultTest(unittest.TestCase):
         with IsolatedDataDir():
             app = make_bare_app(default_cfg(interval_minutes=30))
             with mock.patch("time.time", return_value=NOW), \
-                    mock.patch.object(config, "save_config") as saver:
+                    mock.patch.object(config_store, "save_config") as saver:
                 app._download_result(True, "C:/cache/a.png")
         saver.assert_not_called()
 
@@ -86,7 +86,7 @@ class DownloadResultTest(unittest.TestCase):
                     app = make_bare_app(default_cfg(interval_minutes=30))
                     app.is_downloading = True
                     with mock.patch("time.time", return_value=NOW), \
-                            mock.patch.object(config, "save_config"):
+                            mock.patch.object(config_store, "save_config"):
                         app._download_result(success, "x")
                     self.assertEqual(app.next_btn.calls[-1]["state"], "normal")
 
@@ -183,7 +183,7 @@ class FetchAndSetWallpaperTest(unittest.TestCase):
         self.assertFalse(app.is_downloading)
 
     def test_candidates_are_handed_to_the_worker(self):
-        from source_manager import SourceManager
+        from services.sources import SourceManager
         app = self._app()
         app.source_manager = SourceManager(app.cfg)
         app.fetch_and_set_wallpaper()
@@ -311,13 +311,13 @@ class TimerLoopDispatchTest(unittest.TestCase):
 
 class SelectCandidatesTest(unittest.TestCase):
     def test_selected_source_is_used(self):
-        from source_manager import SourceManager
+        from services.sources import SourceManager
         app = make_bare_app(default_cfg(source_id="yandere"))
         app.source_manager = SourceManager(app.cfg)
         self.assertEqual(app._selected_source()["id"], "yandere")
 
     def test_unknown_selection_falls_back_to_all(self):
-        from source_manager import SourceManager
+        from services.sources import SourceManager
         app = make_bare_app(default_cfg(source_id="ghost"))
         app.source_manager = SourceManager(app.cfg)
         self.assertEqual(app._selected_source()["id"], "all")

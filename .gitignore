@@ -3,7 +3,11 @@ build
 dist
 __pycache__
 *.pyc
+
+# 测试用的隔离数据目录与临时输出
 .test-tmp
 .pytest_cache
-wallpaper_changer.spec
-thw.spec
+test-output.txt
+
+# PyInstaller 的产物（thw.spec 本身是要纳入版本管理的）
+*.spec.bak

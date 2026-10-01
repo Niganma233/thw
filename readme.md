@@ -33,17 +33,64 @@ python wallpaper_changer.py --silent
 
 ## 项目结构
 
+分层规则：**core → services → ui → app**，箭头永不反向。
+`tests/test_layering.py` 会自动检查这条规则、以及"core 与 services 不得依赖界面工具包"。
+
 ```
-wallpaper_changer.py   入口：参数解析、单实例锁、启动主界面
-gui.py                 界面层：主窗口、星标面板、托盘菜单、全局快捷键与轮播计时
-wallpaper_service.py   服务层：壁纸设置/显示方式、在线下载（带重试）、星标收藏管理、缓存管理
-config.py              配置层：路径、默认配置的读写、开机自启注册表
-source_manager.py      图源数据层：内置/自定义图源的增删改、排序、启用状态与配置迁移
-source_manager_view.py 图源管理器 UI：列表、拖拽排序、启用/禁用、编辑、测试
-settings_view.py       设置面板：自动轮播、壁纸显示、缓存管理、全局快捷键
-favorite_view.py       收藏面板：收藏管理、预览、收藏轮播
-fixed_combobox.py      收藏选择框：固定高度（最多 8 项）的可滚动下拉列表
+wallpaper_changer.py   入口：参数解析、单实例检查、全局外观、启动主窗口
+
+app.py                 编排层：生命周期、下载调度、托盘与视图之间的协调
+                       （本身不含任何 tkinter 依赖——弹窗走 ui.dialogs，控件在 ui.main_window）
+
+core/                  纯逻辑与本地配置，不依赖界面工具包
+  paths.py               数据目录（APP_DIR / Favorites / Cache / config.json）
+  config_store.py        配置文件的读写
+  constants.py           共享常量（图片扩展名、壁纸显示方式）
+  scheduler.py           定时策略：间隔、收藏暂停、失败退避、倒计时文案
+
+services/              与外部世界打交道的能力
+  wallpaper_win.py       桌面壁纸读写（Win32 + 注册表显示方式）
+  images.py              把图源返回的字节解释成图片
+  downloader.py          网络抓取与多图源回退
+  wallpaper_worker.py    后台下载线程（结果走队列，不碰界面）
+  cache.py               下载缓存的落盘、统计与清理
+  favorites.py           收藏夹读写
+  sources.py             图源的增删改、排序、启用状态与配置迁移
+  autostart.py           开机自启（注册表）
+  single_instance.py     单实例锁（命名互斥体）
+
+ui/                    所有 CustomTkinter 控件
+  theme.py               全局外观与共享字体/配色
+  widgets.py             共享小控件（卡片、打开目录）
+  status_bar.py          状态栏与未捕获回调异常的呈现
+  main_window.py         主窗口外壳：顶栏、动作按钮、标签页、底栏
+  settings_view.py       设置面板：自动轮播、壁纸显示、缓存管理、全局快捷键
+  source_manager_view.py 图源管理器：列表、拖拽排序、启用/禁用、编辑、测试
+  favorite_view.py       收藏面板：收藏管理、预览、收藏轮播
+  fixed_combobox.py      收藏选择框：固定高度（最多 8 项）的可滚动下拉列表
+  tray.py                系统托盘图标与菜单
+  hotkeys.py             全局快捷键注册
+  dialogs.py             弹窗与收藏命名对话框
+
+tests/                 单元测试（标准库 unittest，无需额外安装）
 ```
+
+## 开发
+
+跑测试：
+
+```bash
+python -m unittest discover -s tests -t .
+```
+
+测试不需要额外安装任何东西（用标准库 `unittest` 写成，`pytest` 也能直接收集）。
+测试把数据目录重定向到项目下的 `.test-tmp/`，**不会**碰到 `%APPDATA%` 里的真实
+配置、收藏与缓存；托盘图标、全局热键、弹窗、下载线程也都用替身顶掉了。
+
+依赖说明：`customtkinter` 在 `requirements.txt` 里是**精确锁定**的版本。
+`ui/fixed_combobox.py` 依赖 `CTkComboBox` 的一批私有属性、`ui/dialogs.py` 依赖
+`CTkInputDialog._entry`，升级 CustomTkinter 前请先跑一遍测试——
+`tests/test_ui_smoke.py` 里的 `FixedHeightComboBoxSmokeTest` 会真的展开一次下拉列表。
 
 ## 使用方法
 
@@ -84,10 +131,11 @@ fixed_combobox.py      收藏选择框：固定高度（最多 8 项）的可滚
 
 ```bash
 pip install pyinstaller
-pyinstaller -F -w wallpaper_changer.py
+pyinstaller thw.spec
 ```
 
-生成的 `dist/wallpaper_changer.exe` 可独立运行。
+生成的 `dist/thw.exe` 可独立运行（无控制台窗口）。
+`thw.spec` 已纳入版本管理，改动入口或新增依赖时请一并更新它。
 
 ## 注意事项
 

@@ -1,6 +1,6 @@
 """core.scheduler：换壁纸的定时策略。
 
-这些用例原本是针对 ``gui.WallpaperApp`` 的特征测试（那时计时逻辑还混在界面类
+这些用例原本是针对 ``app.WallpaperApp`` 的特征测试（那时计时逻辑还混在界面类
 里，只能靠 ``object.__new__`` 绕过构造来测）。Phase 4 抽出 RefreshScheduler 后
 迁移到这里——不再需要任何 Tk 或 App 的脚手架。
 """

@@ -1,21 +1,21 @@
 """收藏夹（星标壁纸）的读写。
 
-收藏目录与缓存目录一样，是导入时从 config 取值的模块级常量；测试通过重定向本模块的
-FAVORITES_DIR 来隔离。
+路径一律通过 ``core.paths`` 读取（``paths.FAVORITES_DIR``），理由同 services.cache：
+按值绑定会让路径隔离出现漏网之鱼。
 """
 import os
 import shutil
 import time
 import uuid
 
-from config import FAVORITES_DIR
 from core.constants import IMAGE_EXTENSIONS
+from core import paths
 
 
 def list_favorites():
     """返回收藏目录下的图片文件名，按大小写不敏感的字典序排序。"""
     try:
-        files = [f for f in os.listdir(FAVORITES_DIR) if f.lower().endswith(IMAGE_EXTENSIONS)]
+        files = [f for f in os.listdir(paths.FAVORITES_DIR) if f.lower().endswith(IMAGE_EXTENSIONS)]
     except OSError:
         return []
     return sorted(files, key=str.casefold)
@@ -43,10 +43,10 @@ def save_favorite(src_path, name):
     if ext not in IMAGE_EXTENSIONS:
         ext = ".jpg"
     fav_filename = f"{base}{ext}"
-    fav_path = os.path.join(FAVORITES_DIR, fav_filename)
+    fav_path = os.path.join(paths.FAVORITES_DIR, fav_filename)
     if os.path.exists(fav_path):
         fav_filename = f"{base}_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}{ext}"
-        fav_path = os.path.join(FAVORITES_DIR, fav_filename)
+        fav_path = os.path.join(paths.FAVORITES_DIR, fav_filename)
     shutil.copy2(src_path, fav_path)
     return fav_filename, fav_path
 
@@ -60,7 +60,7 @@ def delete_favorite(filename):
     safe = os.path.basename(filename or "")
     if not safe or safe != filename:
         return False
-    path = os.path.join(FAVORITES_DIR, safe)
+    path = os.path.join(paths.FAVORITES_DIR, safe)
     if os.path.isfile(path):
         os.remove(path)
         return True

@@ -15,9 +15,9 @@ from typing import Callable
 import customtkinter as ctk
 from PIL import Image
 
-import config
-import wallpaper_service
+from core import paths
 from core.scheduler import BEHAVIOR_CAROUSEL, BEHAVIOR_PAUSE
+from services import favorites as favorites_service
 from ui.fixed_combobox import FixedHeightComboBox
 from ui.widgets import make_card, open_folder
 
@@ -65,7 +65,7 @@ class FavoriteView:
         card, body = make_card(self.parent, "收藏管理", "收藏、选择、应用、删除都集中在这里。")
         card.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=8)
         ctk.CTkButton(body, text="⭐ 收藏当前壁纸", height=38, command=self.hooks.on_favorite_current).pack(fill=tk.X, pady=4)
-        ctk.CTkButton(body, text="📂 打开收藏夹", height=38, command=lambda: open_folder(config.FAVORITES_DIR)).pack(fill=tk.X, pady=4)
+        ctk.CTkButton(body, text="📂 打开收藏夹", height=38, command=lambda: open_folder(paths.FAVORITES_DIR)).pack(fill=tk.X, pady=4)
         ctk.CTkLabel(body, text="已收藏壁纸", font=("Microsoft YaHei", 12, "bold")).pack(anchor=tk.W, pady=(13, 4))
         self.fav_combo_var = tk.StringVar()
         # 收藏数量再多，下拉列表也只显示固定高度的 8 项（其余滚动查看），
@@ -115,7 +115,7 @@ class FavoriteView:
 
     def refresh(self):
         """按磁盘上的实际收藏重新填充列表。"""
-        files = wallpaper_service.list_favorites()
+        files = favorites_service.list_favorites()
         self.fav_combo.configure(values=files)
         if files:
             if self.current_selection() not in files:
@@ -129,7 +129,7 @@ class FavoriteView:
 
         收藏轮播靠它推进，App 不需要知道下拉框是怎么实现的。
         """
-        files = wallpaper_service.list_favorites()
+        files = favorites_service.list_favorites()
         if not files:
             return False
         current = self.current_selection()
@@ -165,7 +165,7 @@ class FavoriteView:
         path = self._path_for(filename)
         was_current = self.hooks.on_is_current(path)
         try:
-            if not wallpaper_service.delete_favorite(filename):
+            if not favorites_service.delete_favorite(filename):
                 raise FileNotFoundError("文件不存在")
             self.refresh()
             if was_current:
@@ -186,7 +186,7 @@ class FavoriteView:
 
     @staticmethod
     def _path_for(filename):
-        return os.path.join(config.FAVORITES_DIR, os.path.basename(filename))
+        return os.path.join(paths.FAVORITES_DIR, os.path.basename(filename))
 
     def _selected_path(self):
         filename = self.current_selection()

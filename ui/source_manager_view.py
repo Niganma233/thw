@@ -5,9 +5,9 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-import config
-import wallpaper_service
-from source_manager import SourceManager
+from core import config_store
+from services import downloader
+from services.sources import SourceManager
 from ui import theme
 from ui.widgets import make_card
 
@@ -231,7 +231,7 @@ class SourceManagerView:
             return
         self.selected_id = data["id"]
         self.cfg["source_id"] = self.selected_id
-        config.save_config(self.cfg)
+        config_store.save_config(self.cfg)
         self.refresh()
         self.on_changed(save=False)
         self.on_status(f"已保存图源：{name}", "ready")
@@ -246,7 +246,7 @@ class SourceManagerView:
         self.manager.delete(self.selected_id)
         self.selected_id = "all"
         self.cfg["source_id"] = "all"
-        config.save_config(self.cfg)
+        config_store.save_config(self.cfg)
         self.refresh()
         self.on_changed(save=False)
         self.on_status("已删除自定义图源", "ready")
@@ -258,7 +258,7 @@ class SourceManagerView:
             candidates = self.manager.enabled_candidates()
             self.selected_id = candidates[0]["id"] if candidates else "all"
             self.cfg["source_id"] = self.selected_id
-        config.save_config(self.cfg)
+        config_store.save_config(self.cfg)
         self.refresh()
         self.on_changed(save=False)
 
@@ -288,7 +288,7 @@ class SourceManagerView:
         if target is None:
             target = len(self.manager.custom_sources()) - 1
         if self.manager.move(source_id, target):
-            config.save_config(self.cfg)
+            config_store.save_config(self.cfg)
             self.refresh()
             self.on_changed(save=False)
             self.on_status("已调整图源优先级", "ready")
@@ -314,7 +314,7 @@ class SourceManagerView:
         try:
             timeout = max(5, min(60, int(self.edit_timeout.get())))
             retries = max(1, min(5, int(self.edit_retries.get())))
-            url = wallpaper_service.build_source_url(source["url"], site=source.get("site", "all"), size=source.get("size", "pc"))
+            url = downloader.build_source_url(source["url"], site=source.get("site", "all"), size=source.get("size", "pc"))
         except Exception as exc:
             messagebox.showwarning("无法测试", str(exc), parent=self.parent)
             return
@@ -324,7 +324,7 @@ class SourceManagerView:
 
         def task():
             try:
-                wallpaper_service.fetch_source_image(url, timeout=timeout, retries=retries)
+                downloader.fetch_source_image(url, timeout=timeout, retries=retries)
                 result = ("source_test_ok", f"图源测试成功：{source['name']}")
             except Exception as exc:
                 result = ("source_test_error", f"图源测试失败：{exc}")

@@ -1,8 +1,8 @@
 """下载缓存的落盘、统计与清理。
 
-缓存目录目前是导入时从 config 取到的模块级常量（``from config import CACHE_DIR``，
-按值绑定）。这意味着重定向路径必须同时改本模块的 CACHE_DIR —— 测试就是这么做的
-（见 tests/helpers.py），Phase 7 会把路径改成可注入的 core/paths.py，届时这个坑消失。
+路径一律通过 ``core.paths`` 读取（``paths.CACHE_DIR``），**不**在导入时按值绑定。
+按值绑定意味着重定向路径必须记得同时改每个模块里那份副本——漏一个就会动到
+用户真实的缓存，这个坑在重构过程中真的踩到过。
 """
 import io
 import os
@@ -11,8 +11,8 @@ import uuid
 
 from PIL import Image
 
-from config import CACHE_DIR
 from core.constants import IMAGE_EXTENSIONS
+from core import paths
 from services.images import detect_extension
 
 # 缓存里最多保留多少张图片（当前正在使用的那张始终受保护）
@@ -22,7 +22,7 @@ MAX_CACHED_FILES = 16
 def cleanup_cache(keep_path, max_files=MAX_CACHED_FILES):
     """按修改时间保留最新的 ``max_files`` 张，其余删掉；``keep_path`` 永不删除。"""
     try:
-        files = [os.path.join(CACHE_DIR, name) for name in os.listdir(CACHE_DIR) if name.lower().endswith(IMAGE_EXTENSIONS)]
+        files = [os.path.join(paths.CACHE_DIR, name) for name in os.listdir(paths.CACHE_DIR) if name.lower().endswith(IMAGE_EXTENSIONS)]
         files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
         protected = os.path.abspath(keep_path) if keep_path else ""
         for path in files[max_files:]:
@@ -51,7 +51,7 @@ def write_wallpaper_file(image_data):
             ext = ".png"
 
     filename = f"wallpaper_{int(time.time())}_{uuid.uuid4().hex[:8]}{ext}"
-    path = os.path.join(CACHE_DIR, filename)
+    path = os.path.join(paths.CACHE_DIR, filename)
     temp = path + ".tmp"
     with open(temp, "wb") as handle:
         handle.write(image_data)
@@ -67,10 +67,10 @@ def get_cache_info():
     total = 0
     count = 0
     try:
-        for name in os.listdir(CACHE_DIR):
+        for name in os.listdir(paths.CACHE_DIR):
             if not name.lower().endswith(IMAGE_EXTENSIONS):
                 continue
-            path = os.path.join(CACHE_DIR, name)
+            path = os.path.join(paths.CACHE_DIR, name)
             if os.path.isfile(path):
                 count += 1
                 try:
@@ -101,14 +101,14 @@ def clear_cache(keep_path=None):
     freed = 0
     failed = 0
     try:
-        names = os.listdir(CACHE_DIR)
+        names = os.listdir(paths.CACHE_DIR)
     except OSError:
         return 0, 0, 0
 
     for name in names:
         if not name.lower().endswith(IMAGE_EXTENSIONS):
             continue
-        path = os.path.join(CACHE_DIR, name)
+        path = os.path.join(paths.CACHE_DIR, name)
         if os.path.abspath(path) == protected:
             continue
         if not os.path.isfile(path):

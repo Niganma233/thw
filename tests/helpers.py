@@ -1,14 +1,8 @@
 """测试公共设施：隔离数据目录、构造不带副作用的 WallpaperApp。
 
-隔离是必须的，原因有两条：
-
-1. ``config`` 在**导入时**就计算并创建 ``%APPDATA%\\TouhouWallpaper``；
-2. ``services.cache`` / ``services.favorites`` 用
-   ``from config import CACHE_DIR / FAVORITES_DIR`` 把路径**按值**绑定进了
-   自己的模块命名空间。
-
-所以只改 ``config`` 上的常量不够，必须同时改这两个模块里那份副本，
-否则测试会动到用户真实的收藏与缓存。
+隔离只需要重定向 ``core.paths`` 上的四个常量：其余模块一律以 ``paths.XXX`` 的形式
+读取路径，刻意不在导入时按值绑定——那样的话每新增一个模块就要记得在测试里多打
+一个补丁，漏一个就会动到用户的真实数据。
 """
 from __future__ import annotations
 
@@ -32,18 +26,14 @@ if str(PROJECT_ROOT) not in sys.path:
 # 而普通的 Path.mkdir(parents=True) 没有这个问题。
 TEST_ROOT = PROJECT_ROOT / ".test-tmp"
 
-import config  # noqa: E402
-import services.cache  # noqa: E402
-import services.favorites  # noqa: E402
+import core.paths  # noqa: E402
 
 # 需要在测试期间被重定向的模块级路径常量：(模块, 属性名)
 _PATH_TARGETS = (
-    (config, "APP_DIR"),
-    (config, "FAVORITES_DIR"),
-    (config, "CACHE_DIR"),
-    (config, "CONFIG_FILE"),
-    (services.cache, "CACHE_DIR"),
-    (services.favorites, "FAVORITES_DIR"),
+    (core.paths, "APP_DIR"),
+    (core.paths, "FAVORITES_DIR"),
+    (core.paths, "CACHE_DIR"),
+    (core.paths, "CONFIG_FILE"),
 )
 
 
@@ -119,7 +109,7 @@ class FakeWidget:
 
 def default_cfg(**overrides):
     """返回一份可安全修改的默认配置副本。"""
-    cfg = copy.deepcopy(config.DEFAULT_CONFIG)
+    cfg = copy.deepcopy(core.config_store.DEFAULT_CONFIG)
     cfg.update(overrides)
     return cfg
 
@@ -145,26 +135,26 @@ def make_bare_app(cfg=None, mode="online"):
 
     计时状态现在由 ``app.scheduler`` 持有，这里给它一个真实的 RefreshScheduler。
     """
-    import gui
+    import app
     from core.scheduler import RefreshScheduler, resolve_favorite_behavior
 
-    app = object.__new__(gui.WallpaperApp)
-    app.cfg = default_cfg() if cfg is None else cfg
-    app.scheduler = RefreshScheduler(
-        interval_minutes=app.cfg.get("interval_minutes", 30),
-        favorite_behavior=resolve_favorite_behavior(app.cfg),
+    app_ = object.__new__(app.WallpaperApp)
+    app_.cfg = default_cfg() if cfg is None else cfg
+    app_.scheduler = RefreshScheduler(
+        interval_minutes=app_.cfg.get("interval_minutes", 30),
+        favorite_behavior=resolve_favorite_behavior(app_.cfg),
         mode=mode,
     )
-    app.is_downloading = False
-    app.current_applied_wallpaper = ""
-    app._closing = False
-    app.countdown_var = FakeVar()
-    app.next_btn = FakeWidget()
-    app.status_log = []
-    app.status = FakeStatus(app.status_log)
+    app_.is_downloading = False
+    app_.current_applied_wallpaper = ""
+    app_._closing = False
+    app_.countdown_var = FakeVar()
+    app_.next_btn = FakeWidget()
+    app_.status_log = []
+    app_.status = FakeStatus(app_.status_log)
     # set_status 是视图拿到的公开回调，测试里直接替换掉，断言走 status_log
-    app.set_status = lambda text, kind="ready": app.status_log.append((text, kind))
-    return app
+    app_.set_status = lambda text, kind="ready": app_.status_log.append((text, kind))
+    return app_
 
 
 @contextlib.contextmanager
